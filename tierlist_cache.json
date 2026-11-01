@@ -1,0 +1,209 @@
+{
+  "patch": "16.21",
+  "lane": "all",
+  "tier_filter": "emerald_plus",
+  "average_winrate": 51.69,
+  "total_champions": 20,
+  "champions": [
+    {
+      "name": "Cho'Gath",
+      "rank": 1,
+      "tier": "S+",
+      "lane": "jungle",
+      "winrate": 53.64,
+      "delta": 1.95,
+      "pickrate": 5.72,
+      "banrate": 8.48
+    },
+    {
+      "name": "Jinx",
+      "rank": 1,
+      "tier": "S+",
+      "lane": "bottom",
+      "winrate": 53.07,
+      "delta": 1.38,
+      "pickrate": 13.48,
+      "banrate": 7.33
+    },
+    {
+      "name": "Ekko",
+      "rank": 1,
+      "tier": "S+",
+      "lane": "middle",
+      "winrate": 53.14,
+      "delta": 1.45,
+      "pickrate": 5.21,
+      "banrate": 2.79
+    },
+    {
+      "name": "Thresh",
+      "rank": 1,
+      "tier": "S+",
+      "lane": "support",
+      "winrate": 53.43,
+      "delta": 1.74,
+      "pickrate": 14.95,
+      "banrate": 13.09
+    },
+    {
+      "name": "Alistar",
+      "rank": 2,
+      "tier": "S+",
+      "lane": "support",
+      "winrate": 52.73,
+      "delta": 1.04,
+      "pickrate": 6.15,
+      "banrate": 2.2
+    },
+    {
+      "name": "Wukong",
+      "rank": 2,
+      "tier": "S+",
+      "lane": "jungle",
+      "winrate": 53.67,
+      "delta": 1.98,
+      "pickrate": 6.38,
+      "banrate": 6.08
+    },
+    {
+      "name": "Ahri",
+      "rank": 2,
+      "tier": "S+",
+      "lane": "middle",
+      "winrate": 53.09,
+      "delta": 1.4,
+      "pickrate": 9.97,
+      "banrate": 3.27
+    },
+    {
+      "name": "Darius",
+      "rank": 2,
+      "tier": "S+",
+      "lane": "top",
+      "winrate": 52.81,
+      "delta": 1.12,
+      "pickrate": 7.66,
+      "banrate": 14.4
+    },
+    {
+      "name": "Master Yi",
+      "rank": 3,
+      "tier": "S",
+      "lane": "jungle",
+      "winrate": 52.65,
+      "delta": 0.96,
+      "pickrate": 6.12,
+      "banrate": 16.06
+    },
+    {
+      "name": "Katarina",
+      "rank": 3,
+      "tier": "S",
+      "lane": "middle",
+      "winrate": 52.41,
+      "delta": 0.72,
+      "pickrate": 6.58,
+      "banrate": 11.92
+    },
+    {
+      "name": "Rell",
+      "rank": 3,
+      "tier": "S",
+      "lane": "support",
+      "winrate": 53.36,
+      "delta": 1.67,
+      "pickrate": 3.95,
+      "banrate": 1.4
+    },
+    {
+      "name": "Vladimir",
+      "rank": 4,
+      "tier": "S",
+      "lane": "middle",
+      "winrate": 53.22,
+      "delta": 1.53,
+      "pickrate": 4.24,
+      "banrate": 6.39
+    },
+    {
+      "name": "Blitzcrank",
+      "rank": 4,
+      "tier": "S",
+      "lane": "support",
+      "winrate": 52.98,
+      "delta": 1.29,
+      "pickrate": 7.64,
+      "banrate": 15.24
+    },
+    {
+      "name": "Kai'Sa",
+      "rank": 4,
+      "tier": "S-",
+      "lane": "bottom",
+      "winrate": 51.83,
+      "delta": 0.14,
+      "pickrate": 21.81,
+      "banrate": 4.15
+    },
+    {
+      "name": "Camille",
+      "rank": 4,
+      "tier": "S",
+      "lane": "top",
+      "winrate": 51.95,
+      "delta": 0.26,
+      "pickrate": 4.33,
+      "banrate": 1.86
+    },
+    {
+      "name": "Viego",
+      "rank": 5,
+      "tier": "S",
+      "lane": "jungle",
+      "winrate": 51.51,
+      "delta": -0.18,
+      "pickrate": 8.3,
+      "banrate": 6.82
+    },
+    {
+      "name": "Nami",
+      "rank": 5,
+      "tier": "S",
+      "lane": "support",
+      "winrate": 52.19,
+      "delta": 0.5,
+      "pickrate": 8.71,
+      "banrate": 1.13
+    },
+    {
+      "name": "Ornn",
+      "rank": 5,
+      "tier": "S",
+      "lane": "top",
+      "winrate": 52.96,
+      "delta": 1.27,
+      "pickrate": 3.92,
+      "banrate": 0.6
+    },
+    {
+      "name": "Kog'Maw",
+      "rank": 6,
+      "tier": "A+",
+      "lane": "bottom",
+      "winrate": 53.83,
+      "delta": 2.14,
+      "pickrate": 2.38,
+      "banrate": 0.78
+    },
+    {
+      "name": "Yasuo",
+      "rank": 6,
+      "tier": "S",
+      "lane": "middle",
+      "winrate": 52.2,
+      "delta": 0.51,
+      "pickrate": 9.23,
+      "banrate": 26.12
+    }
+  ]
+}
