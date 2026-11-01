@@ -1716,3 +1716,159 @@ tr:hover {
     border-radius: 3px;
     flex-shrink: 0;
 }
+
+/* ========================================================
+   ESTILOS AUTOPSIA POST-PARTIDA (MEDALLAS & QUÉ COSTÓ EL GAME)
+   ======================================================== */
+.autopsy-card {
+    background: linear-gradient(135deg, #111827 0%, #0f172a 100%);
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.autopsy-card.win-border {
+    border-color: rgba(34, 197, 94, 0.4);
+    box-shadow: 0 4px 20px rgba(34, 197, 94, 0.08);
+}
+
+.autopsy-card.defeat-border {
+    border-color: rgba(244, 63, 94, 0.4);
+    box-shadow: 0 4px 20px rgba(244, 63, 94, 0.08);
+}
+
+.autopsy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+}
+
+.autopsy-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.autopsy-champ-img {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    border: 2px solid #38bdf8;
+    background: #0b0f19;
+}
+
+.autopsy-title-tag {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.autopsy-champ-meta {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.autopsy-stats-strip {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+.autopsy-stat-val {
+    color: #f1f5f9;
+    font-weight: 700;
+}
+
+.autopsy-verdict {
+    background: rgba(15, 23, 42, 0.8);
+    border-left: 4px solid #38bdf8;
+    border-radius: 0 8px 8px 0;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #e2e8f0;
+}
+
+.autopsy-verdict.win-verdict {
+    border-left-color: #22c55e;
+}
+
+.autopsy-verdict.defeat-verdict {
+    border-left-color: #f43f5e;
+}
+
+.autopsy-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.autopsy-section-title {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.autopsy-badge-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.autopsy-badge-card {
+    background: #090e17;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 10px 12px;
+    transition: transform 0.2s;
+}
+
+.autopsy-badge-card:hover {
+    transform: translateY(-1px);
+    border-color: #334155;
+}
+
+.autopsy-badge-card.positive {
+    border-left: 3px solid #22c55e;
+}
+
+.autopsy-badge-card.negative {
+    border-left: 3px solid #f43f5e;
+}
+
+.autopsy-badge-name {
+    font-size: 11px;
+    font-weight: 800;
+    margin-bottom: 3px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.autopsy-badge-metric {
+    font-size: 11px;
+    color: #cbd5e1;
+    font-weight: 600;
+}
+
+.autopsy-badge-desc {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.4;
+    margin-top: 4px;
+}

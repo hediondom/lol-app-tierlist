@@ -1,8 +1,12 @@
 import os
-from typing import Dict, Any, List, Optional
+import requests
+import urllib3
+from typing import Dict, Any, List, Optional, Tuple
 from lcu_connector import LCUConnector
 from riot_api import RiotAPIClient
 from lolalytics import LolalyticsClient
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class ScoutService:
     """
@@ -21,6 +25,8 @@ class ScoutService:
         self.riot_api = RiotAPIClient(api_key=self.api_key) if self.api_key else None
         self._cached_game_data: Optional[Dict[str, Any]] = None
         self._cached_game_id: Optional[int] = None
+        self._live_session = requests.Session()
+        self._live_session.verify = False
 
     def scout_puuid(self, puuid: str, summoner_name: Optional[str] = None, assigned_position: str = "") -> Dict[str, Any]:
         """
@@ -168,60 +174,165 @@ class ScoutService:
             "badges": badges
         }
 
-    def scout_active_match(self, force: bool = False) -> Dict[str, Any]:
+    def _resolve_in_game_roster(self, my_puuid: Optional[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[int]]:
         """
-        Escanea la partida activa de forma inteligente:
-        1. Si está en Pantalla de Carga o En Partida (InProgress):
-           Revela a los 10 jugadores (5 Aliados y 5 Rivales) sin censura ni anonimato.
-        2. Si está en Selección de Campeones (ChampSelect):
-           Si no es anónimo, muestra los aliados; si es SoloQ, indica que se revelarán en pantalla de carga.
+        Extrae la lista de los 10 jugadores en Pantalla de Carga / En Partida utilizando
+        una arquitectura en cascada de 3 capas:
+        1. Riot Live Client Data API (puerto local 2999) - Infalible en pantalla de carga e in-game.
+        2. LCU API (/lol-gameflow/v1/session -> teamOne/teamTwo o playerChampionSelections).
+        3. Riot Spectator API v5 (nube oficial de Riot, si se configuró una API Key).
         """
-        if not self.lcu.session or not self.lcu.port:
-            if not self.lcu.connect():
-                return {"status": "disconnected", "message": "Cliente LoL no detectado"}
+        allies: List[Dict[str, Any]] = []
+        enemies: List[Dict[str, Any]] = []
+        game_id: Optional[int] = None
 
-        # 1. Comprobar si está en Pantalla de Carga o En Partida (Gameflow InProgress)
+        # -------------------------------------------------------------
+        # CAPA 1: Live Client Data API (https://127.0.0.1:2999)
+        # -------------------------------------------------------------
+        try:
+            res_live = self._live_session.get("https://127.0.0.1:2999/liveclientdata/playerlist", timeout=0.8)
+            if res_live.status_code == 200:
+                raw_players = res_live.json()
+                if isinstance(raw_players, list) and len(raw_players) > 0:
+                    my_name = ""
+                    try:
+                        res_name = self._live_session.get("https://127.0.0.1:2999/liveclientdata/activeplayername", timeout=0.5)
+                        if res_name.status_code == 200:
+                            my_name = res_name.text.replace('"', '').strip()
+                    except Exception:
+                        pass
+
+                    my_team = "ORDER"
+                    for p in raw_players:
+                        p_name = p.get("summonerName", "")
+                        if my_name and (p_name == my_name or my_name in p_name):
+                            my_team = p.get("team", "ORDER")
+                            break
+
+                    print(f"[*] Live Client Data (2999) detectó {len(raw_players)} jugadores. Mi equipo: {my_team}")
+
+                    for p in raw_players:
+                        p_name = p.get("summonerName", "Invocador")
+                        champ_name = p.get("championName", "")
+                        pos = str(p.get("position", "")).lower()
+                        if pos == "utility":
+                            pos = "support"
+                        is_me = bool(my_name and (p_name == my_name or my_name in p_name))
+                        is_ally = (p.get("team") == my_team)
+
+                        p_puuid = my_puuid if (is_me and my_puuid) else ""
+                        if not p_puuid and self.lcu.session:
+                            try:
+                                clean_name = p_name.split("#")[0]
+                                sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={p_name}")
+                                if not sum_res:
+                                    sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={clean_name}")
+                                if sum_res and sum_res.get("puuid"):
+                                    p_puuid = sum_res.get("puuid")
+                            except Exception:
+                                pass
+
+                        if p_puuid:
+                            profile = self.scout_puuid(p_puuid, summoner_name=p_name, assigned_position=pos)
+                        else:
+                            profile = {
+                                "name": p_name,
+                                "puuid": "",
+                                "assigned_position": pos,
+                                "rank": {"tier": "UNRANKED", "division": "", "lp": 0, "winrate": 0.0},
+                                "recent_wr": 0.0,
+                                "streak": "N/A",
+                                "kda_ratio": 0.0,
+                                "top_champions": [],
+                                "badges": []
+                            }
+
+                        profile["champion_name"] = champ_name
+                        profile["is_me"] = is_me
+
+                        if is_ally:
+                            allies.append(profile)
+                        else:
+                            enemies.append(profile)
+
+                    if allies:
+                        return allies, enemies, 999999
+        except Exception:
+            pass
+
+        # -------------------------------------------------------------
+        # CAPA 2: LCU /lol-gameflow/v1/session
+        # -------------------------------------------------------------
         gameflow = self.lcu.request("GET", "/lol-gameflow/v1/session")
         if gameflow and gameflow.get("phase") in ("InProgress", "GameStart", "Reconnect"):
             game_data = gameflow.get("gameData", {})
             game_id = game_data.get("gameId")
-
-            # Evitar re-analizar la misma partida en bucle si ya fue escaneada
-            if not force and game_id and game_id == self._cached_game_id and self._cached_game_data is not None:
-                return self._cached_game_data
-
             team_one = game_data.get("teamOne", [])
             team_two = game_data.get("teamTwo", [])
 
-            me_info = self.lcu.get_current_summoner()
-            my_puuid = me_info.get("puuid") if me_info else None
+            # Si teamOne o teamTwo tienen jugadores
+            if team_one or team_two:
+                my_team_list = team_one
+                enemy_team_list = team_two
+                if any(p.get("puuid") == my_puuid for p in team_two):
+                    my_team_list = team_two
+                    enemy_team_list = team_one
 
-            # Determinar cuál es el equipo aliado y cuál el rival
-            my_team_list = team_one
-            enemy_team_list = team_two
-            if any(p.get("puuid") == my_puuid for p in team_two):
-                my_team_list = team_two
-                enemy_team_list = team_one
+                def process_lcu_team(plist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                    res = []
+                    for p in plist:
+                        p_puuid = p.get("puuid")
+                        champ_id = p.get("championId", 0)
+                        champ_name = self.lcu.get_champion_name(champ_id) or f"Champ {champ_id}"
+                        role = p.get("selectedPosition", "").lower()
+                        if role == "utility":
+                            role = "support"
+                        name = p.get("summonerName") or p.get("gameName") or "Invocador"
+                        tag = p.get("tagLine", "")
+                        if tag and "#" not in name:
+                            name = f"{name}#{tag}"
+                        is_me = (p_puuid == my_puuid) if my_puuid else False
+                        if p_puuid:
+                            prof = self.scout_puuid(p_puuid, summoner_name=name, assigned_position=role)
+                        else:
+                            prof = {
+                                "name": name,
+                                "puuid": "",
+                                "assigned_position": role,
+                                "rank": {"tier": "UNRANKED", "division": "", "lp": 0, "winrate": 0.0},
+                                "recent_wr": 0.0,
+                                "streak": "N/A",
+                                "kda_ratio": 0.0,
+                                "top_champions": [],
+                                "badges": []
+                            }
+                        prof["champion_name"] = champ_name
+                        prof["champion_id"] = champ_id
+                        prof["is_me"] = is_me
+                        res.append(prof)
+                    return res
 
-            print(f"[*] Partida detectada (ID: {game_id}). Analizando a los 10 jugadores...")
+                allies = process_lcu_team(my_team_list)
+                enemies = process_lcu_team(enemy_team_list)
+                if allies:
+                    return allies, enemies, game_id
 
-            def process_team(player_list: List[Dict[str, Any]], is_my_team: bool) -> List[Dict[str, Any]]:
-                res = []
-                for p in player_list:
-                    p_puuid = p.get("puuid")
-                    champ_id = p.get("championId", 0)
-                    champ_name = self.lcu.get_champion_name(champ_id) or f"Champ {champ_id}"
-                    role = p.get("selectedPosition", "").lower()
-                    name = p.get("summonerName") or p.get("gameName") or f"Invocador"
-                    tag = p.get("tagLine", "")
-                    if tag and "#" not in name:
-                        name = f"{name}#{tag}"
-
-                    is_me = (p_puuid == my_puuid)
+            # Fallback 2.1: playerChampionSelections
+            selections = game_data.get("playerChampionSelections", [])
+            if selections:
+                for idx, sel in enumerate(selections):
+                    p_puuid = sel.get("puuid", "")
+                    cid = sel.get("championId", 0)
+                    cname = self.lcu.get_champion_name(cid) or f"Champ {cid}"
+                    role = sel.get("selectedPosition", "").lower()
+                    if role == "utility":
+                        role = "support"
+                    name = sel.get("summonerInternalName", f"Invocador {idx+1}")
+                    is_me = (p_puuid == my_puuid) if my_puuid else False
                     if p_puuid:
-                        profile = self.scout_puuid(p_puuid, summoner_name=name, assigned_position=role)
+                        prof = self.scout_puuid(p_puuid, summoner_name=name, assigned_position=role)
                     else:
-                        profile = {
+                        prof = {
                             "name": name,
                             "puuid": "",
                             "assigned_position": role,
@@ -232,15 +343,88 @@ class ScoutService:
                             "top_champions": [],
                             "badges": []
                         }
+                    prof["champion_name"] = cname
+                    prof["is_me"] = is_me
+                    if idx < 5:
+                        allies.append(prof)
+                    else:
+                        enemies.append(prof)
+                if allies:
+                    return allies, enemies, game_id
 
-                    profile["champion_name"] = champ_name
-                    profile["champion_id"] = champ_id
-                    profile["is_me"] = is_me
-                    res.append(profile)
-                return res
+        # -------------------------------------------------------------
+        # CAPA 3: Riot Spectator API v5 (Cloud API)
+        # -------------------------------------------------------------
+        if self.riot_api and my_puuid:
+            try:
+                spec = self.riot_api.get_active_game_by_puuid(my_puuid)
+                if spec and "participants" in spec:
+                    parts = spec.get("participants", [])
+                    my_participant = next((p for p in parts if p.get("puuid") == my_puuid), None)
+                    my_team_id = my_participant.get("teamId", 100) if my_participant else 100
 
-            allies = process_team(my_team_list, True)
-            enemies = process_team(enemy_team_list, False)
+                    for p in parts:
+                        p_puuid = p.get("puuid", "")
+                        cid = p.get("championId", 0)
+                        cname = self.lcu.get_champion_name(cid) or f"Champ {cid}"
+                        r_name = p.get("riotId", "") or p.get("summonerName", "Invocador")
+                        is_me = (p_puuid == my_puuid)
+                        is_ally = (p.get("teamId") == my_team_id)
+
+                        if p_puuid:
+                            prof = self.scout_puuid(p_puuid, summoner_name=r_name)
+                        else:
+                            prof = {
+                                "name": r_name,
+                                "puuid": "",
+                                "assigned_position": "",
+                                "rank": {"tier": "UNRANKED", "division": "", "lp": 0, "winrate": 0.0},
+                                "recent_wr": 0.0,
+                                "streak": "N/A",
+                                "kda_ratio": 0.0,
+                                "top_champions": [],
+                                "badges": []
+                            }
+                        prof["champion_name"] = cname
+                        prof["is_me"] = is_me
+
+                        if is_ally:
+                            allies.append(prof)
+                        else:
+                            enemies.append(prof)
+
+                    if allies:
+                        return allies, enemies, spec.get("gameId", 999998)
+            except Exception as e:
+                print(f"[!] Error consultando Spectator API: {e}")
+
+        return allies, enemies, game_id
+
+    def scout_active_match(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Escanea la partida activa de forma inteligente:
+        1. Si está en Pantalla de Carga o En Partida (InProgress):
+           Revela a los 10 jugadores (5 Aliados y 5 Rivales) sin censura ni anonimato
+           usando Live Client Data (2999), LCU o Spectator API.
+        2. Si está en Selección de Campeones (ChampSelect):
+           Si no es anónimo, muestra los aliados; si es SoloQ, indica que se revelarán en pantalla de carga.
+        """
+        if not self.lcu.session or not self.lcu.port:
+            if not self.lcu.connect():
+                return {"status": "disconnected", "message": "Cliente LoL no detectado"}
+
+        me_info = self.lcu.get_current_summoner()
+        my_puuid = me_info.get("puuid") if me_info else None
+
+        # 1. Comprobar si está en Pantalla de Carga o En Partida mediante la cascada de 3 capas
+        allies, enemies, game_id = self._resolve_in_game_roster(my_puuid)
+
+        if allies:
+            # Evitar re-analizar la misma partida en bucle si ya fue escaneada
+            if not force and game_id and game_id == self._cached_game_id and self._cached_game_data is not None:
+                return self._cached_game_data
+
+            print(f"[*] Partida activa confirmada con {len(allies)} aliados y {len(enemies)} rivales. Generando análisis...")
 
             # Buscar enfrentamiento directo en línea (Matchup de carril)
             direct_matchup = None
@@ -269,6 +453,8 @@ class ScoutService:
                 "direct_matchup": direct_matchup,
                 "team_balance": team_balance
             }
+
+            # Guardar en caché únicamente cuando tenemos datos válidos
             self._cached_game_id = game_id
             self._cached_game_data = result
             return result

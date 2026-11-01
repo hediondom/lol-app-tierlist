@@ -80,6 +80,14 @@ class RiotAPIClient:
         endpoint = f"/lol/match/v5/matches/{match_id}"
         return self._get(self.region, endpoint)
 
+    def get_active_game_by_puuid(self, puuid: str) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene la partida activa en tiempo real (Spectator-v5) usando el PUUID del invocador.
+        Útil para detectar los 10 jugadores en pantalla de carga antes de que inicie la partida.
+        """
+        endpoint = f"/lol/spectator/v5/active-games/by-summoner/{puuid}"
+        return self._get(self.platform, endpoint)
+
 if __name__ == "__main__":
     import sys
     print("[*] Modulo Riot API listo.")

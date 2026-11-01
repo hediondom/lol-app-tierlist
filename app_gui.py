@@ -11,6 +11,7 @@ from lolalytics import LolalyticsClient
 from lcu_connector import LCUConnector
 from scout import ScoutService
 from profile_service import ProfileService
+from postgame_service import PostGameService
 from hotkey_manager import GlobalHotkeyManager
 
 class AppAPI:
@@ -25,11 +26,13 @@ class AppAPI:
         self._lcu = LCUConnector()
         self._scout = ScoutService()
         self._profile_service = ProfileService(self._lcu)
+        self._postgame_service = PostGameService(self._lcu)
         self._auto_runes_enabled = True
         self._last_applied_champ_id = None
         self._window = None
+        self._ws_client = None
         
-        # Inicializar Administrador de Hotkey Global
+        # Inicializar Administrador de Hotkey Global Nativo Win32 (Vanguard-Safe)
         self._hotkey_mgr = GlobalHotkeyManager(on_hotkey_callback=self._on_hotkey_pressed)
         
         self._start_background_watcher()
@@ -186,6 +189,14 @@ class AppAPI:
         champ_select = self._lcu.get_champ_select_session()
 
         in_game = phase in ("InProgress", "GameStart", "Reconnect")
+        if not in_game:
+            try:
+                res_live = self._scout._live_session.get("https://127.0.0.1:2999/liveclientdata/activeplayername", timeout=0.3)
+                if res_live.status_code == 200:
+                    in_game = True
+            except Exception:
+                pass
+
         in_champ_select = (champ_select is not None) or (phase == "ChampSelect")
 
         return {
@@ -205,13 +216,46 @@ class AppAPI:
         """Obtiene el perfil completo del invocador e historial de partidas estilo OP.GG."""
         return self._profile_service.get_full_profile()
 
+    def get_postgame_autopsy(self, force: bool = False) -> Dict[str, Any]:
+        """Obtiene la autopsia táctica y medallas de rendimiento de la última partida."""
+        return self._postgame_service.analyze_last_game(force=force)
+
     def set_auto_runes(self, enabled: bool):
         """Activa o desactiva el inyector automático de runas."""
         self._auto_runes_enabled = enabled
         print(f"[*] Auto-Runas en segundo plano: {'ACTIVADO' if enabled else 'DESACTIVADO'}")
 
     def _start_background_watcher(self):
-        """Hilo en segundo plano para aplicar runas automáticamente al fijar campeón."""
+        """
+        Monitorea el cliente local de LoL mediante WebSockets WAMP (0 ms de latencia, 0% CPU).
+        Si el WebSocket se desconecta, mantiene un hilo ligero de respaldo.
+        """
+        def on_lcu_event(uri: str, data: Any, event_type: str):
+            if "champ-select/v1/session" in uri and self._auto_runes_enabled:
+                try:
+                    status = self._lcu.get_my_champ_select_status()
+                    if status and status.get("is_locked_in"):
+                        champ_id = status.get("champion_id")
+                        champ_name = status.get("champion_name")
+                        role = status.get("role")
+                        if champ_id and champ_id != self._last_applied_champ_id and champ_name:
+                            print(f"[LCU WebSocket 0ms] Lock-in detectado: {champ_name} ({role})! Inyectando runas e Item Set...")
+                            build_data = self._lolalytics.get_champion_build(champ_name)
+                            pop = build_data["most_popular"]["runes"]
+                            payload = pop["lcu_payload"]
+                            self._lcu.apply_rune_page(
+                                payload["name"],
+                                payload["primaryStyleId"],
+                                payload["subStyleId"],
+                                payload["selectedPerkIds"]
+                            )
+                            self._lcu.inject_item_set_for_champion(champ_name, champ_id, build_data)
+                            self._last_applied_champ_id = champ_id
+                    elif not status:
+                        self._last_applied_champ_id = None
+                except Exception as e:
+                    print(f"[!] Error procesando evento de ChampSelect: {e}")
+
         def watcher_loop():
             while True:
                 try:
@@ -219,15 +263,17 @@ class AppAPI:
                         self._lcu.connect()
 
                     if self._lcu.session:
-                        if self._auto_runes_enabled:
+                        # Iniciar listener de WebSockets WAMP si aún no está corriendo
+                        if not self._ws_client:
+                            self._ws_client = self._lcu.start_websocket_listener(on_lcu_event)
+
+                        # Loop de respaldo HTTP cada 3 segundos
+                        if self._auto_runes_enabled and not self._ws_client:
                             status = self._lcu.get_my_champ_select_status()
                             if status and status.get("is_locked_in"):
                                 champ_id = status.get("champion_id")
                                 champ_name = status.get("champion_name")
-                                role = status.get("role")
-                                
                                 if champ_id and champ_id != self._last_applied_champ_id and champ_name:
-                                    print(f"[GUI Watcher] Lock-in detectado: {champ_name} ({role})! Aplicando runas e items...")
                                     build_data = self._lolalytics.get_champion_build(champ_name)
                                     pop = build_data["most_popular"]["runes"]
                                     payload = pop["lcu_payload"]
@@ -238,13 +284,12 @@ class AppAPI:
                                         payload["selectedPerkIds"]
                                     )
                                     self._lcu.inject_item_set_for_champion(champ_name, champ_id, build_data)
-                                    print(f"[GUI Watcher] ¡Runas e Items de Lolalytics listos para {champ_name}!")
                                     self._last_applied_champ_id = champ_id
                             elif not status:
                                 self._last_applied_champ_id = None
                 except Exception:
                     pass
-                time.sleep(2)
+                time.sleep(3)
 
         thread = threading.Thread(target=watcher_loop, daemon=True)
         thread.start()

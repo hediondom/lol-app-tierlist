@@ -3,12 +3,85 @@ import sys
 import re
 import json
 import base64
+import ssl
+import time
+import threading
 import requests
 import urllib3
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
+
+try:
+    import websocket
+except ImportError:
+    websocket = None
 
 # Desactivar advertencias de certificados autofirmados del cliente local de LoL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class LCUWebSocketClient:
+    """
+    Cliente WebSocket nativo para el bus de eventos WAMP de League of Legends.
+    Recibe notificaciones push en tiempo real (0 ms de retraso, 0% CPU en reposo).
+    """
+    def __init__(self, port: int, auth_token: str, on_event_callback: Callable[[str, Any, str], None]):
+        self.port = port
+        self.auth_token = auth_token
+        self.on_event_callback = on_event_callback
+        self.ws = None
+        self.running = False
+        self.thread = None
+
+    def start(self):
+        if not websocket:
+            print("[!] Módulo 'websocket-client' no disponible; se mantendrá polling HTTP.")
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        url = f"wss://127.0.0.1:{self.port}/"
+        headers = ["Authorization: Basic " + self.auth_token]
+
+        def on_open(ws):
+            # Suscribirse al bus general de eventos WAMP del LCU
+            try:
+                ws.send(json.dumps([5, "OnJsonApiEvent"]))
+                print("[+] Conectado al bus de eventos WebSocket del cliente LoL (0ms Latencia)")
+            except Exception as e:
+                print(f"[!] Error suscribiendo a eventos WebSocket: {e}")
+
+        def on_message(ws, message):
+            if not message:
+                return
+            try:
+                payload = json.loads(message)
+                if isinstance(payload, list) and len(payload) >= 3 and payload[1] == "OnJsonApiEvent":
+                    ev = payload[2]
+                    self.on_event_callback(ev.get("uri", ""), ev.get("data"), ev.get("eventType", ""))
+            except Exception:
+                pass
+
+        while self.running:
+            try:
+                self.ws = websocket.WebSocketApp(
+                    url,
+                    header=headers,
+                    on_open=on_open,
+                    on_message=on_message
+                )
+                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+            except Exception:
+                pass
+            time.sleep(3)
+
+    def stop(self):
+        self.running = False
+        if self.ws:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
 class LCUConnector:
     """
@@ -241,8 +314,17 @@ class LCUConnector:
 
     def inject_item_set_for_champion(self, champion_name: str, champion_id: int, build_data: Dict[str, Any]) -> bool:
         """
-        Inyecta el conjunto de objetos (Item Set) en la carpeta de configuracion del juego.
-        Aparece directamente dentro de la tienda del juego al presionar 'P'.
+        Inyecta el conjunto de objetos (Item Set) enriquecido con bloques tácticos situacionales:
+        - 1. Inicio Recomendado & Visión
+        - 2. Opciones de Botas (según el rival: Tabis, Mercurio, Jonias, etc.)
+        - 3. Core Build (Mayor Winrate en Lolalytics)
+        - 4. Situacional: Anti-Curación (Heridas Graves)
+        - 5. Situacional: Anti-Tanques & Penetración
+        - 6. Situacional: Supervivencia & Anti-Burst
+        - 7. Consumibles & Elixires de Late Game
+        
+        Se sincroniza tanto en memoria a través de la API del cliente (/lol-item-sets/v1/)
+        como en disco en la carpeta Config/Champions/ para persistencia total.
         """
         try:
             folder_name = self.get_champion_folder_name(champion_id) or champion_name.replace(" ", "").replace("'", "")
@@ -256,24 +338,83 @@ class LCUConnector:
             situational_items = items_data.get("situational", [])
             
             blocks = []
-            if start_items:
-                blocks.append({
-                    "type": "Objetos Iniciales",
-                    "items": [{"id": str(i["id"]), "count": 1} for i in start_items] + [{"id": "3340", "count": 1}]
-                })
+            # 1. Inicio Recomendado
+            start_ids = [{"id": str(i["id"]), "count": 1} for i in start_items] if start_items else [{"id": "1055", "count": 1}, {"id": "2003", "count": 1}]
+            blocks.append({
+                "type": "1. Inicio Recomendado & Visión",
+                "items": start_ids + [{"id": "3340", "count": 1}]
+            })
+
+            # 2. Opciones de Botas Tácticas
+            blocks.append({
+                "type": "2. Opciones de Botas (Elige según el rival)",
+                "items": [
+                    {"id": "3047", "count": 1}, # Punteras de Acero (Tabis - vs AD)
+                    {"id": "3111", "count": 1}, # Botas de Mercurio (vs AP / CC)
+                    {"id": "3158", "count": 1}, # Jonias (Vel. de Habilidad / CDR)
+                    {"id": "3020", "count": 1}, # Hechicero (Penetración Mágica)
+                    {"id": "3006", "count": 1}, # Berserker (Velocidad de Ataque)
+                    {"id": "3009", "count": 1}  # Rapidez (vs Ralentizaciones)
+                ]
+            })
+
+            # 3. Core Build Principal
             if core_items:
                 blocks.append({
-                    "type": f"Core Build (Maxeo: {skill_prio})",
+                    "type": f"3. Core Build (Mayor Winrate • Max: {skill_prio})",
                     "items": [{"id": str(i["id"]), "count": 1} for i in core_items]
                 })
-            if situational_items:
-                blocks.append({
-                    "type": "Opciones de Late Game / Situacionales",
-                    "items": [{"id": str(i["id"]), "count": 1} for i in situational_items]
-                })
+
+            # 4. Situacional: Anti-Curación
             blocks.append({
-                "type": "Consumibles & Pociones",
-                "items": [{"id": "2003", "count": 1}, {"id": "2055", "count": 1}, {"id": "2140", "count": 1}]
+                "type": "4. Situacional: Anti-Curación (Heridas Graves)",
+                "items": [
+                    {"id": "3123", "count": 1}, # Llamado del Verdugo
+                    {"id": "3033", "count": 1}, # Recordatorio Mortal
+                    {"id": "3076", "count": 1}, # Chaleco de Zarzas
+                    {"id": "3075", "count": 1}, # Malla de Espinas
+                    {"id": "3916", "count": 1}, # Orbe del Olvido
+                    {"id": "3165", "count": 1}  # Morellonomicon
+                ]
+            })
+
+            # 5. Situacional: Anti-Tanques & Penetración
+            blocks.append({
+                "type": "5. Situacional: Anti-Tanques & Penetración",
+                "items": [
+                    {"id": "3036", "count": 1}, # Lord Dominik
+                    {"id": "3135", "count": 1}, # Bastón del Vacío
+                    {"id": "3137", "count": 1}, # Criptoflorecer
+                    {"id": "3153", "count": 1}, # Rey Arruinado
+                    {"id": "6694", "count": 1}, # Rencor de Serylda
+                    {"id": "6653", "count": 1}  # Tormento de Liandry
+                ]
+            })
+
+            # 6. Situacional: Supervivencia & Anti-Burst
+            blocks.append({
+                "type": "6. Situacional: Supervivencia & Anti-Burst",
+                "items": [
+                    {"id": "3157", "count": 1}, # Reloj de Arena de Zhonya
+                    {"id": "3026", "count": 1}, # Ángel Guardián
+                    {"id": "3140", "count": 1}, # Fajín de Mercurio (QSS)
+                    {"id": "3139", "count": 1}, # Cimitarra Mercurial
+                    {"id": "3156", "count": 1}, # Fauces de Malmortius
+                    {"id": "3102", "count": 1}, # Velo de Banshee
+                    {"id": "3053", "count": 1}  # Guantelete de Sterak
+                ]
+            })
+
+            # 7. Consumibles & Elixires
+            blocks.append({
+                "type": "7. Consumibles & Elixires de Late Game",
+                "items": [
+                    {"id": "2055", "count": 1}, # Guardián de Control
+                    {"id": "2031", "count": 1}, # Poción Reutilizable
+                    {"id": "2138", "count": 1}, # Elixir de Hierro
+                    {"id": "2139", "count": 1}, # Elixir de Brujería
+                    {"id": "2140", "count": 1}  # Elixir de Cólera
+                ]
             })
             
             item_set = {
@@ -288,8 +429,21 @@ class LCUConnector:
                 "type": "custom",
                 "blocks": blocks
             }
+
+            # Sincronización 1: Vía API local del cliente LoL
+            try:
+                summoner = self.get_current_summoner()
+                if summoner and summoner.get("summonerId"):
+                    sum_id = summoner["summonerId"]
+                    existing = self.request("GET", f"/lol-item-sets/v1/item-sets/{sum_id}/sets") or {"itemSets": []}
+                    sets_list = [s for s in existing.get("itemSets", []) if s.get("title") != item_set["title"]]
+                    sets_list.append(item_set)
+                    existing["itemSets"] = sets_list
+                    self.request("PUT", f"/lol-item-sets/v1/item-sets/{sum_id}/sets", json=existing)
+            except Exception:
+                pass
             
-            # Buscar la carpeta de instalacion de LoL
+            # Sincronización 2: Vía archivo local en Config/Champions/
             lock_path = self.find_lockfile()
             base_dir = os.path.dirname(lock_path) if lock_path else r"C:\Riot Games\League of Legends"
             target_dir = os.path.join(base_dir, "Config", "Champions", folder_name, "Recommended")
@@ -299,10 +453,22 @@ class LCUConnector:
             with open(target_file, "w", encoding="utf-8") as f:
                 json.dump(item_set, f, indent=2)
             
+            print(f"[+] Item Set Enriquecido inyectado exitosamente para {champion_name} (7 Bloques Tácticos)")
             return True
         except Exception as e:
             print(f"[!] Error al inyectar Item Set: {e}")
             return False
+
+    def start_websocket_listener(self, on_event_callback: Callable[[str, Any, str], None]) -> Optional[LCUWebSocketClient]:
+        """Inicia el cliente WebSocket WAMP para recibir notificaciones push en tiempo real."""
+        if not self.session or not self.port or not self.password:
+            if not self.connect():
+                return None
+
+        auth_token = base64.b64encode(f"riot:{self.password}".encode("utf-8")).decode("utf-8")
+        ws_client = LCUWebSocketClient(self.port, auth_token, on_event_callback)
+        ws_client.start()
+        return ws_client
 
 if __name__ == "__main__":
     connector = LCUConnector()

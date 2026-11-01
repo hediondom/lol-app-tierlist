@@ -1035,6 +1035,7 @@ function loadUserProfile() {
         if (mainContent) mainContent.style.display = 'grid';
 
         renderProfileData(data);
+        loadPostGameAutopsy();
     }).catch(err => {
         console.error("[!] Error cargando perfil:", err);
         if (emptyState) emptyState.style.display = 'block';
@@ -1293,4 +1294,112 @@ function renderMatchesList(matches, ddragonVer) {
             </div>
         `;
     }).join('');
+}
+
+// ----------------------------------------------------
+// 6. Autopsia Post-Partida (Medallas & Rendimiento)
+// ----------------------------------------------------
+function loadPostGameAutopsy(force = false) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_postgame_autopsy) return;
+    const cardEl = document.getElementById('postGameAutopsyCard');
+    if (!cardEl) return;
+
+    window.pywebview.api.get_postgame_autopsy(force).then(data => {
+        if (!data || data.status !== 'ready') {
+            cardEl.style.display = 'none';
+            return;
+        }
+        renderPostGameAutopsy(data);
+    }).catch(err => {
+        console.error("[!] Error cargando autopsia post-partida:", err);
+    });
+}
+
+function renderPostGameAutopsy(data) {
+    const cardEl = document.getElementById('postGameAutopsyCard');
+    const headerEl = document.getElementById('autopsyHeader');
+    const verdictEl = document.getElementById('autopsyVerdict');
+    const gridEl = document.getElementById('autopsyGrid');
+
+    if (!cardEl || !headerEl || !verdictEl || !gridEl) return;
+
+    // Ajustar borde y estilos según resultado
+    cardEl.classList.remove('win-border', 'defeat-border');
+    verdictEl.classList.remove('win-verdict', 'defeat-verdict');
+
+    if (data.win) {
+        cardEl.classList.add('win-border');
+        verdictEl.classList.add('win-verdict');
+    } else {
+        cardEl.classList.add('defeat-border');
+        verdictEl.classList.add('defeat-verdict');
+    }
+
+    const titleColor = data.win ? '#22c55e' : '#f43f5e';
+    const kdaColor = data.kda_ratio >= 3.0 ? '#22c55e' : (data.kda_ratio >= 2.0 ? '#38bdf8' : '#94a3b8');
+
+    // 1. Header
+    headerEl.innerHTML = `
+        <div class="autopsy-header-left">
+            <img class="autopsy-champ-img" src="https://cdn5.lolalytics.com/champx46/${data.champion_slug}.webp" onerror="this.style.display='none'">
+            <div>
+                <div class="autopsy-title-tag" style="color: ${titleColor};">🔬 ${data.verdict_title}</div>
+                <div class="autopsy-champ-meta">${data.champion_name} • ${data.duration_str}</div>
+            </div>
+        </div>
+        <div class="autopsy-stats-strip">
+            <div>KDA: <span class="autopsy-stat-val" style="color: ${kdaColor};">${data.kills}/${data.deaths}/${data.assists} (${data.kda_ratio}:1)</span></div>
+            <div>CS: <span class="autopsy-stat-val">${data.cs} (${data.cs_per_min}/min)</span></div>
+            <div>P/Kill: <span class="autopsy-stat-val" style="color: #f43f5e;">${data.kill_participation}%</span></div>
+            <button class="btn-secondary" style="font-size: 11px; padding: 4px 10px;" onclick="loadPostGameAutopsy(true)" title="Forzar análisis de la partida más reciente">↻ Recalcular</button>
+        </div>
+    `;
+
+    // 2. Veredicto
+    verdictEl.innerHTML = `
+        <strong>Diagnóstico Táctico:</strong> ${data.verdict_summary}
+    `;
+
+    // 3. Medallas / Fortalezas
+    const strengthsHtml = (data.strengths && data.strengths.length > 0)
+        ? data.strengths.map(s => `
+            <div class="autopsy-badge-card positive">
+                <div class="autopsy-badge-name" style="color: #22c55e;">
+                    <span>${s.badge}</span>
+                </div>
+                <div class="autopsy-badge-metric">${s.title}</div>
+                <div class="autopsy-badge-desc">${s.desc}</div>
+            </div>
+        `).join('')
+        : `<div style="font-size: 11px; color: #64748b; font-style: italic; padding: 8px 0;">No se registraron medallas destacadas en esta partida.</div>`;
+
+    // 4. Puntos Críticos / Debilidades
+    const weaknessesHtml = (data.weaknesses && data.weaknesses.length > 0)
+        ? data.weaknesses.map(w => `
+            <div class="autopsy-badge-card negative">
+                <div class="autopsy-badge-name" style="color: #f43f5e;">
+                    <span>${w.badge}</span>
+                </div>
+                <div class="autopsy-badge-metric">${w.title}</div>
+                <div class="autopsy-badge-desc">${w.desc}</div>
+            </div>
+        `).join('')
+        : `<div style="font-size: 11px; color: #22c55e; font-style: italic; padding: 8px 0;">✨ ¡Partida limpia! No se detectaron fallos críticos individuales.</div>`;
+
+    gridEl.innerHTML = `
+        <div class="autopsy-col">
+            <div class="autopsy-section-title" style="color: #22c55e;">🌟 Lo Que Hiciste Bien</div>
+            <div class="autopsy-badge-list">
+                ${strengthsHtml}
+            </div>
+        </div>
+        <div class="autopsy-col">
+            <div class="autopsy-section-title" style="color: #f43f5e;">⚠️ Puntos Críticos / Qué Costó la Partida</div>
+            <div class="autopsy-badge-list">
+                ${weaknessesHtml}
+            </div>
+        </div>
+    `;
+
+    cardEl.style.display = 'block';
 }
