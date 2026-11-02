@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from lcu_connector import LCUConnector
+from ddragon import get_ddragon
 
 QUEUE_NAMES = {
     420: "Ranked Solo/Duo",
@@ -48,17 +49,11 @@ class ProfileService:
     """
     def __init__(self, lcu_connector: Optional[LCUConnector] = None):
         self.lcu = lcu_connector or LCUConnector()
-        self.ddragon_version = "14.21.1"
-        self._load_ddragon_version()
 
-    def _load_ddragon_version(self):
-        try:
-            import requests
-            res = requests.get("https://ddragon.leagueoflegends.com/api/versions.json", timeout=4)
-            if res.status_code == 200:
-                self.ddragon_version = res.json()[0]
-        except Exception:
-            self.ddragon_version = "14.21.1"
+    @property
+    def ddragon_version(self) -> str:
+        """Versión de Data Dragon para los iconos (se actualiza sola en segundo plano)."""
+        return get_ddragon().version
 
     def get_full_profile(self) -> Dict[str, Any]:
         """
@@ -209,8 +204,8 @@ class ProfileService:
             # Hechizos de Invocador
             spell1_id = p_local.get("spell1Id", 4)
             spell2_id = p_local.get("spell2Id", 14)
-            spell1_name = SPELL_NAMES.get(spell1_id, "SummonerFlash")
-            spell2_name = SPELL_NAMES.get(spell2_id, "SummonerDot")
+            spell1_name = get_ddragon().spell_key_name(spell1_id) or SPELL_NAMES.get(spell1_id, "SummonerFlash")
+            spell2_name = get_ddragon().spell_key_name(spell2_id) or SPELL_NAMES.get(spell2_id, "SummonerDot")
 
             # Rol jugado
             lane = str(p_local.get("timeline", {}).get("lane", "")).lower()

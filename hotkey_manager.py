@@ -73,7 +73,9 @@ class GlobalHotkeyManager:
     - Basado en eventos puros del sistema operativo mediante GetMessageW en hilo independiente.
     - Consumo de CPU exactamente 0% en reposo.
     """
-    DEFAULT_HOTKEY = "ctrl+x"
+    # RegisterHotKey se queda con la combinación en todo Windows: evitar atajos
+    # de uso común como Ctrl+X (Cortar)
+    DEFAULT_HOTKEY = "ctrl+shift+x"
 
     def __init__(self, on_hotkey_callback: Callable[[], None]):
         self.callback = on_hotkey_callback
@@ -82,6 +84,10 @@ class GlobalHotkeyManager:
         self.thread_id: Optional[int] = None
         self.ready_event = threading.Event()
         self.lock = threading.Lock()
+        # Cambio de atajo pendiente: lo aplica el hilo de mensajes y devuelve el resultado
+        self._pending_hotkey: Optional[Tuple[str, int, int]] = None
+        self._reload_done = threading.Event()
+        self._reload_ok = False
 
         self.thread = threading.Thread(target=self._msg_loop, daemon=True)
         self.thread.start()
@@ -112,21 +118,31 @@ class GlobalHotkeyManager:
             print(f"[!] Error guardando config.json: {e}")
 
     def set_hotkey(self, combo_str: str) -> bool:
-        """Cambia dinámicamente el atajo global notificando al hilo de mensajes."""
+        """
+        Cambia dinámicamente el atajo global notificando al hilo de mensajes.
+        Devuelve False si la combinación no es válida o si Windows no deja registrarla
+        (por ejemplo, porque otra aplicación ya la usa); en ese caso se mantiene el atajo anterior.
+        """
         mods, vk = parse_combo(combo_str)
         if not vk:
             print(f"[!] Tecla inválida o no soportada: {combo_str}")
             return False
+        if not self.thread_id:
+            return False
 
+        # El lock serializa cambios simultáneos. RegisterHotKey tiene que ejecutarse
+        # en el hilo dueño de la cola de mensajes, así que se espera su respuesta
         with self.lock:
-            self.current_hotkey = combo_str
-            self.modifiers = mods
-            self.vk = vk
-            self.save_hotkey(combo_str)
-
-        if self.thread_id:
+            self._pending_hotkey = (combo_str, mods, vk)
+            self._reload_done.clear()
             user32.PostThreadMessageW(self.thread_id, WM_RELOAD_HOTKEY, 0, 0)
+            ok = self._reload_done.wait(timeout=2.0) and self._reload_ok
 
+        if not ok:
+            print(f"[!] No se pudo registrar {combo_str.upper()} (¿ya la usa otra aplicación?). Se mantiene {self.current_hotkey.upper()}.")
+            return False
+
+        self.save_hotkey(combo_str)
         print(f"[+] Atajo global actualizado: {combo_str.upper()} (Vanguard-Safe Win32 Event)")
         return True
 
@@ -154,10 +170,17 @@ class GlobalHotkeyManager:
                     self.callback()
                 except Exception as e:
                     print(f"[!] Error ejecutando callback de atajo: {e}")
-            elif msg.message == WM_RELOAD_HOTKEY:
+            elif msg.message == WM_RELOAD_HOTKEY and self._pending_hotkey:
+                combo_str, mods, vk = self._pending_hotkey
                 user32.UnregisterHotKey(None, HOTKEY_ID)
-                with self.lock:
+                if user32.RegisterHotKey(None, HOTKEY_ID, mods, vk):
+                    self.current_hotkey, self.modifiers, self.vk = combo_str, mods, vk
+                    self._reload_ok = True
+                else:
+                    # Combinación ocupada: volver a registrar el atajo anterior
                     user32.RegisterHotKey(None, HOTKEY_ID, self.modifiers, self.vk)
+                    self._reload_ok = False
+                self._reload_done.set()
             
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))

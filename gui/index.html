@@ -29,7 +29,8 @@
             <div class="hotkey-pill-container" title="Presiona esta combinación para traer la app al frente sobre el juego o minimizarla">
                 <span class="hotkey-pill-label">⌨️ Superponer App:</span>
                 <select class="hotkey-selector" id="hotkeySelector">
-                    <option value="ctrl+x">Ctrl + X (Recomendado)</option>
+                    <option value="ctrl+shift+x">Ctrl + Shift + X (Recomendado)</option>
+                    <option value="ctrl+x">Ctrl + X (bloquea "Cortar")</option>
                     <option value="ctrl+o">Ctrl + O</option>
                     <option value="alt+x">Alt + X</option>
                     <option value="alt+o">Alt + O</option>
@@ -104,16 +105,16 @@
             </div>
 
             <div class="tier-table-container">
-                <table>
+                <table class="meta-tier-table">
                     <thead>
                         <tr>
-                            <th data-sort="rank" style="width: 75px;" title="Ordenar por Clasificación">Rank <span class="sort-icon">⇅</span></th>
-                            <th data-sort="tier" style="width: 85px;" title="Ordenar por Nivel / Tier">Tier <span class="sort-icon">⇅</span></th>
-                            <th data-sort="name" title="Ordenar Alfabéticamente por Campeón">Campeón <span class="sort-icon">⇅</span></th>
-                            <th data-sort="lane" style="width: 95px;" title="Ordenar por Rol / Línea">Rol <span class="sort-icon">⇅</span></th>
-                            <th data-sort="winrate" style="width: 120px;" title="Ordenar por Win Rate">Win Rate <span class="sort-icon">⇅</span></th>
-                            <th data-sort="pickrate" style="width: 110px;" title="Ordenar por Pick Rate">Pick Rate <span class="sort-icon">⇅</span></th>
-                            <th data-sort="banrate" style="width: 110px;" title="Ordenar por Ban Rate">Ban Rate <span class="sort-icon">⇅</span></th>
+                            <th class="col-rank" data-sort="rank" title="Ordenar por Clasificación">Rank <span class="sort-icon">⇅</span></th>
+                            <th class="col-tier" data-sort="tier" title="Ordenar por Nivel / Tier">Tier <span class="sort-icon">⇅</span></th>
+                            <th class="col-champ" data-sort="name" title="Ordenar Alfabéticamente por Campeón">Campeón <span class="sort-icon">⇅</span></th>
+                            <th class="col-lane" data-sort="lane" title="Ordenar por Rol / Línea">Rol <span class="sort-icon">⇅</span></th>
+                            <th class="col-wr" data-sort="winrate" title="Ordenar por Win Rate">Win Rate <span class="sort-icon">⇅</span></th>
+                            <th class="col-pr" data-sort="pickrate" title="Ordenar por Pick Rate">Pick Rate <span class="sort-icon">⇅</span></th>
+                            <th class="col-br" data-sort="banrate" title="Ordenar por Ban Rate">Ban Rate <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
                     <tbody id="tierTableBody">
@@ -129,9 +130,22 @@
 
         <!-- PESTAÑA 2: BUILDS Y RUNAS -->
         <section class="tab-pane" id="build-tab">
-            <div class="search-bar-container">
-                <input type="text" class="search-input" id="champSearchInput" placeholder="Escribe el nombre de un campeón (ej: Jinx, Aatrox, Cho'Gath)...">
+            <div class="search-bar-container" style="margin-bottom: 12px;">
+                <input type="text" class="search-input" id="champSearchInput" placeholder="Escribe el nombre de un campeón (ej: Lux, Karma, Aatrox, Jinx)...">
                 <button class="btn-primary" style="width: auto; padding: 0 24px;" id="searchBtn">Buscar Build</button>
+            </div>
+
+            <!-- Selector de Roles / Líneas para la Build -->
+            <div class="build-role-bar" id="buildRoleBar">
+                <span class="build-role-label">Rol / Línea:</span>
+                <div class="lane-filters" style="margin-bottom: 0;">
+                    <button class="build-role-btn active" data-role="all">General</button>
+                    <button class="build-role-btn" data-role="top">Top</button>
+                    <button class="build-role-btn" data-role="jungle">Jungle</button>
+                    <button class="build-role-btn" data-role="middle">Mid</button>
+                    <button class="build-role-btn" data-role="bottom">ADC</button>
+                    <button class="build-role-btn" data-role="support">Support</button>
+                </div>
             </div>
 
             <div id="buildContent" style="display: none;">
@@ -158,7 +172,10 @@
                             </div>
                         </div>
 
-                        <button class="btn-primary" id="applyRunesBtn">Inyectar Runas & Objetos a la Tienda de LoL</button>
+                        <div style="display: flex; gap: 8px; margin-top: 14px;">
+                            <button class="btn-primary" id="applyRunesBtn" style="flex: 1.2; font-size: 12px; padding: 10px 12px; margin-top: 0;">⚡ Inyectar Runas & Build Actual</button>
+                            <button class="btn-secondary" id="applyMultiBuildsBtn" style="flex: 1; font-size: 12px; padding: 10px 12px;" title="Inyecta los conjuntos de todos los roles viables del campeón (ej: Mid + Support) a la tienda">📦 Inyectar Todas las Builds</button>
+                        </div>
                     </div>
 
                     <!-- Tarjeta: Hechizos, Habilidades y Objetos -->
@@ -171,7 +188,7 @@
                         <div class="rune-group" style="margin-bottom: 14px;">
                             <div class="rune-group-title">Hechizos de Invocador & Habilidades</div>
                             <div class="rune-item-list" style="margin-bottom: 8px;">
-                                <span class="rune-pill" id="sumsPill">Flash + Barrier</span>
+                                <span id="sumsList" style="display: contents;"></span>
                                 <span class="rune-pill" style="border-color: #2563eb;" id="skillsPill">Max: Q > W > E</span>
                             </div>
                         </div>

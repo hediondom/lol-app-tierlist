@@ -1,10 +1,14 @@
 import os
+import json
+import urllib.parse
 import requests
 import urllib3
 from typing import Dict, Any, List, Optional, Tuple
 from lcu_connector import LCUConnector
 from riot_api import RiotAPIClient
 from lolalytics import LolalyticsClient
+from hotkey_manager import CONFIG_PATH
+from ddragon import get_ddragon
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -21,12 +25,85 @@ class ScoutService:
     def __init__(self, riot_api_key: Optional[str] = None):
         self.lcu = LCUConnector()
         self.lolalytics = LolalyticsClient()
+        if not riot_api_key:
+            try:
+                # Mismo config.json donde se guarda el atajo (junto al .exe en el build, no en _internal)
+                if os.path.exists(CONFIG_PATH):
+                    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        riot_api_key = cfg.get("riot_api_key")
+            except Exception:
+                pass
         self.api_key = riot_api_key or os.environ.get("RIOT_API_KEY", "")
         self.riot_api = RiotAPIClient(api_key=self.api_key) if self.api_key else None
         self._cached_game_data: Optional[Dict[str, Any]] = None
         self._cached_game_id: Optional[int] = None
         self._live_session = requests.Session()
         self._live_session.verify = False
+
+    def resolve_summoner_puuid(self, name_or_riot_id: str) -> Optional[str]:
+        """
+        Resuelve el PUUID de un jugador a partir de su Riot ID (GameName#TAG) o nombre de invocador.
+        Usa LCU local primero (sin necesidad de API key), y si falla y hay Riot API Key configurada,
+        consulta la Riot Cloud API oficial.
+        """
+        if not name_or_riot_id:
+            return None
+
+        if not self.lcu.session or not self.lcu.port:
+            self.lcu.connect()
+
+        # 1. Intentar con LCU POST /lol-summoner/v1/summoners/by-names (soporta nombres con y sin #TAG)
+        if self.lcu.session:
+            try:
+                res = self.lcu.request("POST", "/lol-summoner/v1/summoners/by-names", json=[name_or_riot_id])
+                if isinstance(res, list) and len(res) > 0 and res[0].get("puuid"):
+                    return res[0]["puuid"]
+            except Exception:
+                pass
+
+            # 2. Intentar con LCU GET /lol-summoner/v1/summoners?name= (con URL encoding seguro)
+            try:
+                enc = urllib.parse.quote(name_or_riot_id)
+                sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={enc}")
+                if sum_res and sum_res.get("puuid"):
+                    return sum_res["puuid"]
+            except Exception:
+                pass
+
+            # 3. Si tiene '#', dividir en GameName y TagLine para alias lookup en LCU
+            if "#" in name_or_riot_id:
+                parts = name_or_riot_id.split("#", 1)
+                g_name, tag = parts[0], parts[1]
+                try:
+                    alias_res = self.lcu.request("GET", f"/lol-summoner/v1/alias/lookup?gameName={urllib.parse.quote(g_name)}&tagLine={urllib.parse.quote(tag)}")
+                    if alias_res and alias_res.get("puuid"):
+                        return alias_res["puuid"]
+                except Exception:
+                    pass
+
+        # 4. Fallback con Riot Cloud API (si el usuario ingresó su API key)
+        if "#" in name_or_riot_id and self.riot_api:
+            parts = name_or_riot_id.split("#", 1)
+            g_name, tag = parts[0], parts[1]
+            try:
+                acc = self.riot_api.get_account_by_riot_id(g_name, tag)
+                if acc and acc.get("puuid"):
+                    return acc["puuid"]
+            except Exception:
+                pass
+
+        # 5. Probar con nombre limpio sin tag
+        clean_name = name_or_riot_id.split("#")[0]
+        if self.lcu.session:
+            try:
+                sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={urllib.parse.quote(clean_name)}")
+                if sum_res and sum_res.get("puuid"):
+                    return sum_res["puuid"]
+            except Exception:
+                pass
+
+        return None
 
     def scout_puuid(self, puuid: str, summoner_name: Optional[str] = None, assigned_position: str = "") -> Dict[str, Any]:
         """
@@ -75,6 +152,28 @@ class ScoutService:
                     "winrate": wr
                 }
 
+        # Fallback de Rango con Riot Cloud API si el LCU no tiene datos
+        if rank_info["tier"] == "UNRANKED" and self.riot_api:
+            try:
+                entries = self.riot_api.get_league_entries_by_puuid(puuid)
+                if entries:
+                    for entry in entries:
+                        if entry.get("queueType") == "RANKED_SOLO_5x5":
+                            w = entry.get("wins", 0)
+                            l = entry.get("losses", 0)
+                            tot = w + l
+                            rank_info = {
+                                "tier": entry.get("tier", "UNRANKED"),
+                                "division": entry.get("rank", ""),
+                                "lp": entry.get("leaguePoints", 0),
+                                "wins": w,
+                                "losses": l,
+                                "winrate": round((w / tot * 100), 1) if tot > 0 else 0.0
+                            }
+                            break
+            except Exception:
+                pass
+
         # 3. Obtener Historial de Partidas Recientes (Match History)
         matches_data = self.lcu.request("GET", f"/lol-match-history/v1/products/lol/{puuid}/matches")
         recent_games = []
@@ -99,6 +198,31 @@ class ScoutService:
                     "champion_id": champ_id,
                     "role": p.get("timeline", {}).get("lane", "").lower()
                 })
+
+        # Fallback de Historial con Riot Cloud API si el LCU local está vacío
+        if not recent_games and self.riot_api:
+            try:
+                m_ids = self.riot_api.get_recent_matches(puuid, count=10)
+                for mid in m_ids:
+                    mdet = self.riot_api.get_match_details(mid)
+                    if not mdet:
+                        continue
+                    parts = mdet.get("info", {}).get("participants", [])
+                    for part in parts:
+                        if part.get("puuid") == puuid:
+                            c_id = part.get("championId", 0)
+                            recent_games.append({
+                                "win": part.get("win", False),
+                                "kills": part.get("kills", 0),
+                                "deaths": part.get("deaths", 0),
+                                "assists": part.get("assists", 0),
+                                "champion_name": part.get("championName", f"Champ {c_id}"),
+                                "champion_id": c_id,
+                                "role": part.get("teamPosition", "").lower()
+                            })
+                            break
+            except Exception:
+                pass
 
         # 4. Calcular Métricas Avanzadas (Racha, KDA promedio, Badges)
         streak_count = 0
@@ -168,7 +292,9 @@ class ScoutService:
             "assigned_position": assigned_position,
             "rank": rank_info,
             "recent_wr": recent_wr,
-            "streak": f"+{streak_count} W" if streak_type == "W" else f"-{streak_count} L",
+            "streak": f"+{streak_count} W" if streak_type == "W" else (f"-{streak_count} L" if streak_type == "L" else "N/A"),
+            "streak_type": streak_type,
+            "streak_count": streak_count,
             "kda_ratio": kda_ratio,
             "top_champions": top_champs_formatted,
             "badges": badges
@@ -185,6 +311,7 @@ class ScoutService:
         allies: List[Dict[str, Any]] = []
         enemies: List[Dict[str, Any]] = []
         game_id: Optional[int] = None
+        dd = get_ddragon()
 
         # -------------------------------------------------------------
         # CAPA 1: Live Client Data API (https://127.0.0.1:2999)
@@ -213,7 +340,11 @@ class ScoutService:
 
                     for p in raw_players:
                         p_name = p.get("summonerName", "Invocador")
-                        champ_name = p.get("championName", "")
+                        # championName viene traducido según el idioma del cliente ("Maestro Yi"); rawChampionName
+                        # ("game_character_displayname_MasterYi") no, y Lolalytics espera el nombre en inglés
+                        raw_champ = str(p.get("rawChampionName", "")).replace("game_character_displayname_", "")
+                        champ_id = dd.champion_id(raw_champ) or dd.champion_id(p.get("championName", ""))
+                        champ_name = dd.champion_name(champ_id) or p.get("championName", "")
                         pos = str(p.get("position", "")).lower()
                         if pos == "utility":
                             pos = "support"
@@ -221,16 +352,8 @@ class ScoutService:
                         is_ally = (p.get("team") == my_team)
 
                         p_puuid = my_puuid if (is_me and my_puuid) else ""
-                        if not p_puuid and self.lcu.session:
-                            try:
-                                clean_name = p_name.split("#")[0]
-                                sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={p_name}")
-                                if not sum_res:
-                                    sum_res = self.lcu.request("GET", f"/lol-summoner/v1/summoners?name={clean_name}")
-                                if sum_res and sum_res.get("puuid"):
-                                    p_puuid = sum_res.get("puuid")
-                            except Exception:
-                                pass
+                        if not p_puuid:
+                            p_puuid = self.resolve_summoner_puuid(p_name)
 
                         if p_puuid:
                             profile = self.scout_puuid(p_puuid, summoner_name=p_name, assigned_position=pos)
@@ -248,6 +371,7 @@ class ScoutService:
                             }
 
                         profile["champion_name"] = champ_name
+                        profile["champion_id"] = champ_id
                         profile["is_me"] = is_me
 
                         if is_ally:
@@ -292,6 +416,8 @@ class ScoutService:
                         if tag and "#" not in name:
                             name = f"{name}#{tag}"
                         is_me = (p_puuid == my_puuid) if my_puuid else False
+                        if not p_puuid:
+                            p_puuid = self.resolve_summoner_puuid(name)
                         if p_puuid:
                             prof = self.scout_puuid(p_puuid, summoner_name=name, assigned_position=role)
                         else:
@@ -344,6 +470,7 @@ class ScoutService:
                             "badges": []
                         }
                     prof["champion_name"] = cname
+                    prof["champion_id"] = cid
                     prof["is_me"] = is_me
                     if idx < 5:
                         allies.append(prof)
@@ -386,6 +513,7 @@ class ScoutService:
                                 "badges": []
                             }
                         prof["champion_name"] = cname
+                        prof["champion_id"] = cid
                         prof["is_me"] = is_me
 
                         if is_ally:
@@ -576,24 +704,6 @@ class ScoutService:
         if not allies or not enemies or len(allies) < 1 or len(enemies) < 1:
             return None
 
-        AP_CHAMPIONS = {
-            "ahri", "akali", "anivia", "annie", "aurelionsol", "azir", "bard", "brand", 
-            "cassiopeia", "chogath", "diana", "ekko", "elise", "evelynn", "fiddlesticks", 
-            "fizz", "galio", "gragas", "gwen", "heimerdinger", "hwei", "ivern", "janna", 
-            "karma", "karthus", "kassadin", "katarina", "kayle", "kennen", "leblanc", 
-            "lissandra", "lillia", "lux", "malzahar", "milio", "mordekaiser", "morgana", 
-            "nami", "neeko", "nidalee", "nunu", "orianna", "renataglasc", "ryze", "seraphine", 
-            "singed", "sona", "soraka", "swain", "sylas", "syndra", "taliyah", "teemo", 
-            "twistedfate", "veigar", "velkoz", "vex", "viktor", "vladimir", "xerath", 
-            "yuumi", "ziggs", "zoe", "zyra"
-        }
-
-        TANK_CHAMPIONS = {
-            "alistar", "amumu", "braum", "drmundo", "ksante", "leona", "malphite", 
-            "maokai", "nautilus", "ornn", "poppy", "rammus", "rell", "sejuani", 
-            "shen", "sion", "skarner", "tahmkench", "taric", "thresh", "zac"
-        }
-
         TIER_SCORES = {
             "IRON": 15, "BRONZE": 25, "SILVER": 35, "GOLD": 48,
             "PLATINUM": 60, "EMERALD": 72, "DIAMOND": 85,
@@ -612,9 +722,6 @@ class ScoutService:
             if score >= 20: return "Bronze"
             return "Iron"
 
-        def clean_champ_name(name: str) -> str:
-            return (name or "").lower().replace("'", "").replace(" ", "").replace(".", "").replace("&", "")
-
         def calc_damage_profile(team_players: List[Dict[str, Any]]) -> Dict[str, Any]:
             ad = 0
             ap = 0
@@ -623,11 +730,13 @@ class ScoutService:
             if total == 0:
                 return {"ad_pct": 50, "ap_pct": 50, "tank_pct": 0, "summary": "N/A", "alert": None}
 
+            dd = get_ddragon()
             for p in team_players:
-                c_name = clean_champ_name(p.get("champion_name", ""))
-                if c_name in TANK_CHAMPIONS:
+                # Clase según Data Dragon (cubre campeones nuevos); si no se conoce, cuenta como AD
+                damage = dd.damage_type(p.get("champion_id") or p.get("champion_name"))
+                if damage == "tank":
                     tank += 1
-                elif c_name in AP_CHAMPIONS:
+                elif damage == "ap":
                     ap += 1
                 else:
                     ad += 1
@@ -668,26 +777,16 @@ class ScoutService:
                 wr = 50.0
             wr_impact = (wr - 50.0) * 0.9
 
-            # Racha
-            streak = str(p.get("streak", ""))
+            # Racha (campos numéricos de scout_puuid; los perfiles sin historial no tienen racha)
+            streak_type = p.get("streak_type")
+            streak_count = int(p.get("streak_count") or 0)
+            is_win_streak = streak_type == "W" and streak_count > 0
+            is_loss_streak = streak_type == "L" and streak_count > 0
             streak_impact = 0.0
-            is_win_streak = False
-            is_loss_streak = False
-
-            if "W" in streak:
-                is_win_streak = True
-                try:
-                    num = int(streak.replace("W", "").strip())
-                    streak_impact = min(num * 2.5, 9.0)
-                except Exception:
-                    streak_impact = 2.5
-            elif "L" in streak:
-                is_loss_streak = True
-                try:
-                    num = int(streak.replace("L", "").strip())
-                    streak_impact = -min(num * 3.0, 11.0)
-                except Exception:
-                    streak_impact = -3.0
+            if is_win_streak:
+                streak_impact = min(streak_count * 2.5, 9.0)
+            elif is_loss_streak:
+                streak_impact = -min(streak_count * 3.0, 11.0)
 
             # KDA
             kda = float(p.get("kda_ratio", 2.0) or 2.0)
@@ -834,8 +933,8 @@ class ScoutService:
         return data.get("allies", [])
 
 if __name__ == "__main__":
-    api_key_test = "RGAPI-1330dbb6-a728-48e2-819a-b449474b45bb"
-    scout = ScoutService(riot_api_key=api_key_test)
+    # La API key se lee de config.json ("riot_api_key") o de la variable de entorno RIOT_API_KEY
+    scout = ScoutService()
     
     # Prueba rapida: Si el cliente de LoL esta abierto, hacer scouting de tu propio perfil
     if scout.lcu.connect():

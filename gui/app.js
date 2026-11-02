@@ -1,19 +1,23 @@
 // Estado global de la aplicacion en el frontend
 let currentLane = 'all';
+let currentBuildRole = 'all';
 let currentLoadedBuild = null;
 let autoRunesEnabled = true;
 let autoOverlayEnabled = true;
 let lastScoutedPhase = null;
+let activeHotkey = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initSidebar();
     initLaneFilters();
+    initBuildRoleFilters();
     initTableSort();
     initSearch();
     initToggle();
     initMatchupSearch();
     initProfile();
+    initDelegatedActions();
 
     // Esperar a que la API de PyWebView este disponible
     window.addEventListener('pywebviewready', () => {
@@ -26,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sel = document.getElementById('hotkeySelector');
                 if (sel && savedKey) {
                     sel.value = savedKey;
+                    activeHotkey = savedKey;
                 }
             });
         }
@@ -34,6 +39,30 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(checkLoLStatus, 3000);
     });
 });
+
+// Escapa texto externo (nombres de jugadores, datos de Lolalytics, errores) antes de insertarlo con innerHTML
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Clics en tarjetas generadas dinámicamente: el campeón viaja en atributos data-* en vez de
+// armarse dentro de un onclick, así funcionan los nombres con apóstrofe (Kai'Sa, Cho'Gath...)
+function initDelegatedActions() {
+    document.addEventListener('click', (e) => {
+        const el = e.target.closest('[data-action]');
+        if (!el) return;
+        if (el.dataset.action === 'open-build') {
+            switchToBuild(el.dataset.champ);
+        } else if (el.dataset.action === 'compare') {
+            directCompareFromCounter(el.dataset.myChamp, el.dataset.enemyChamp);
+        }
+    });
+}
 
 // Navegacion entre Pestañas
 function initTabs() {
@@ -100,7 +129,7 @@ function initSearch() {
     const handleSearch = () => {
         const query = input.value.trim();
         if (query) {
-            loadBuild(query);
+            loadBuild(query, currentBuildRole);
         }
     };
 
@@ -109,21 +138,57 @@ function initSearch() {
         if (e.key === 'Enter') handleSearch();
     });
 
+    // Botón: Inyectar Runas y Build del Rol Actual
     document.getElementById('applyRunesBtn').addEventListener('click', () => {
         if (!currentLoadedBuild) return;
         const champName = currentLoadedBuild.champion;
+        const role = currentBuildRole || 'all';
         if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.apply_runes_and_items(champName).then(success => {
+            window.pywebview.api.apply_runes_and_items(champName, role, false).then(success => {
                 if (success) {
-                    alert(`¡Runas y Conjunto de Objetos para ${champName} aplicados!\n\nLos objetos aparecerán en la tienda del juego al presionar la tecla P.`);
+                    alert(`¡Runas y Conjunto de Objetos (${role.toUpperCase()}) para ${champName} aplicados con éxito!\n\nLos objetos aparecerán en la tienda de LoL al presionar la tecla P.`);
                 } else {
-                    alert('No se pudo aplicar. Asegúrate de tener el LoL abierto.');
+                    alert('No se pudo aplicar. Asegúrate de tener el cliente de LoL abierto.');
                 }
             });
         }
     });
 
+    // Botón: Inyectar Todas las Builds del Campeón (Multi-Rol / Flex)
+    const multiBtn = document.getElementById('applyMultiBuildsBtn');
+    if (multiBtn) {
+        multiBtn.addEventListener('click', () => {
+            if (!currentLoadedBuild) return;
+            const champName = currentLoadedBuild.champion;
+            const role = currentBuildRole || 'all';
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.apply_runes_and_items(champName, role, true).then(success => {
+                    if (success) {
+                        alert(`¡Todas las variantes de build para ${champName} (Multi-Rol / Flex) fueron inyectadas a la tienda!\n\nAl presionar la tecla P en el juego, podrás alternar en el menú desplegable superior entre todos sus roles (Mid, Support, Multi-Rol, etc.).`);
+                    } else {
+                        alert('No se pudo aplicar. Asegúrate de tener el cliente de LoL abierto.');
+                    }
+                });
+            }
+        });
+    }
+
     document.getElementById('refreshLobbyBtn').addEventListener('click', () => refreshLobby(true));
+}
+
+// Control de Filtros de Rol en Builds & Runas
+function initBuildRoleFilters() {
+    const roleBtns = document.querySelectorAll('.build-role-btn');
+    roleBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            roleBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentBuildRole = btn.getAttribute('data-role');
+            if (currentLoadedBuild && currentLoadedBuild.champion) {
+                loadBuild(currentLoadedBuild.champion, currentBuildRole);
+            }
+        });
+    });
 }
 
 // Switch de Auto-Runas y Selector de Atajo para Superponer App
@@ -146,7 +211,12 @@ function initToggle() {
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.set_hotkey_config(selectedKey).then(ok => {
                     if (ok) {
+                        activeHotkey = selectedKey;
                         console.log(`[+] Tecla rápida actualizada a ${selectedKey.toUpperCase()}`);
+                    } else {
+                        // Windows no dejó registrar la combinación: el atajo anterior sigue activo
+                        if (activeHotkey) hotkeySelector.value = activeHotkey;
+                        alert(`No se pudo registrar ${selectedKey.toUpperCase()}: probablemente otra aplicación ya usa esa combinación.`);
                     }
                 });
             }
@@ -254,22 +324,22 @@ function renderTierlistTable() {
         const avatarUrl = `https://cdn5.lolalytics.com/champx46/${slug}.webp`;
 
         rowsHtml += `
-            <tr onclick="switchToBuild('${c.name.replace(/'/g, "\\'")}')">
-                <td style="font-weight: 700; color: #94a3b8;">${c.rank != null ? c.rank : '-'}</td>
-                <td><span class="tier-badge ${tierClass}">${c.tier}</span></td>
-                <td>
+            <tr data-action="open-build" data-champ="${escapeHtml(c.name)}">
+                <td class="col-rank" style="font-weight: 700; color: #94a3b8;">${c.rank != null ? c.rank : '-'}</td>
+                <td class="col-tier"><span class="tier-badge ${tierClass}">${escapeHtml(c.tier)}</span></td>
+                <td class="col-champ">
                     <div class="champ-cell">
                         <img class="champ-avatar" src="${avatarUrl}" onerror="this.style.display='none'">
-                        <span>${c.name}</span>
+                        <span>${escapeHtml(c.name)}</span>
                     </div>
                 </td>
-                <td style="text-transform: capitalize; color: #94a3b8;">${c.lane}</td>
-                <td>
+                <td class="col-lane" style="text-transform: capitalize; color: #94a3b8;">${escapeHtml(c.lane)}</td>
+                <td class="col-wr">
                     <span class="${deltaColor}">${c.winrate}%</span>
                     <span class="wr-delta">(${deltaSign}${c.delta}%)</span>
                 </td>
-                <td>${c.pickrate}%</td>
-                <td>${c.banrate}%</td>
+                <td class="col-pr">${c.pickrate}%</td>
+                <td class="col-br">${c.banrate}%</td>
             </tr>
         `;
     });
@@ -291,12 +361,12 @@ function loadTierlist(lane) {
 
         renderTierlistTable();
     }).catch(err => {
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #ef4444;">Error al cargar: ${err}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #ef4444;">Error al cargar: ${escapeHtml(err)}</td></tr>`;
     });
 }
 
 // Cambiar a la pestaña de builds desde la tabla
-function switchToBuild(champName) {
+function switchToBuild(champName, lane = 'all') {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
 
@@ -304,54 +374,94 @@ function switchToBuild(champName) {
     document.getElementById('build-tab').classList.add('active');
 
     document.getElementById('champSearchInput').value = champName;
-    loadBuild(champName);
+    currentBuildRole = lane || 'all';
+
+    // Actualizar botones de rol en la barra
+    document.querySelectorAll('.build-role-btn').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-role') === currentBuildRole);
+    });
+
+    loadBuild(champName, currentBuildRole);
 }
 
 // 2. Cargar Build de un Campeon
-function loadBuild(champName) {
+function loadBuild(champName, role = currentBuildRole) {
     document.getElementById('buildEmptyState').style.display = 'block';
-    document.getElementById('buildEmptyState').innerHTML = `<h3>Buscando build óptima para ${champName}...</h3>`;
+    const roleLabel = role && role !== 'all' ? ` para ${role.toUpperCase()}` : '';
+    document.getElementById('buildEmptyState').innerHTML = `<h3>Buscando build óptima para ${escapeHtml(champName)}${roleLabel}...</h3>`;
     document.getElementById('buildContent').style.display = 'none';
 
     if (!window.pywebview || !window.pywebview.api) return;
 
-    window.pywebview.api.get_champion_build(champName).then(data => {
+    window.pywebview.api.get_champion_build(champName, role).then(data => {
         if (!data || !data.most_popular) return;
 
         const pop = data.most_popular;
         currentLoadedBuild = {
             champion: data.champion,
+            role: role,
             runes: pop.runes
         };
 
         document.getElementById('buildEmptyState').style.display = 'none';
         document.getElementById('buildContent').style.display = 'block';
 
-        document.getElementById('buildChampTitle').innerText = `${data.champion} - Runas Óptimas`;
+        const displayRole = role && role !== 'all' ? ` (${role.toUpperCase()})` : '';
+        document.getElementById('buildChampTitle').innerText = `${data.champion}${displayRole} - Runas Óptimas`;
         document.getElementById('buildWinrateBadge').innerText = `${pop.winrate}% WR (${pop.games.toLocaleString()} partidas)`;
         document.getElementById('buildGamesCount').innerText = `${pop.type}`;
 
+        // Iconos de Data Dragon: runas, hechizos y objetos se reconocen aunque el juego esté en otro idioma
+        const icons = data.icons || { perks: {}, styles: {}, spells: {} };
+        const ddragonVer = data.ddragon_version || '14.21.1';
+        const itemIcon = (id) => `https://ddragon.leagueoflegends.com/cdn/${ddragonVer}/img/item/${Number(id)}.png`;
+        const iconImg = (url, cls) => url ? `<img class="${cls}" src="${escapeHtml(url)}" alt="" onerror="this.style.display='none'">` : '';
+        const iconPill = (name, url, extraStyle = '') => `
+            <span class="rune-pill icon-pill" style="${extraStyle}" title="${escapeHtml(name)}">
+                ${iconImg(url, 'icon-pill-img')}
+                ${escapeHtml(name)}
+            </span>`;
+
         // Rama principal
-        document.getElementById('priStyleTitle').innerText = `Rama Principal: ${pop.runes.primary_style_name}`;
-        document.getElementById('priRunesList').innerHTML = pop.runes.primary_runes.map(r => `<span class="rune-pill">${r.name}</span>`).join('');
+        document.getElementById('priStyleTitle').innerHTML = `${iconImg(icons.styles[pop.runes.primary_style_id], 'style-title-icon')}Rama Principal: ${escapeHtml(pop.runes.primary_style_name)}`;
+        document.getElementById('priRunesList').innerHTML = pop.runes.primary_runes.map(r => iconPill(r.name, icons.perks[r.id])).join('');
 
         // Rama secundaria
-        document.getElementById('secStyleTitle').innerText = `Rama Secundaria: ${pop.runes.sub_style_name}`;
-        document.getElementById('secRunesList').innerHTML = pop.runes.secondary_runes.map(r => `<span class="rune-pill">${r.name}</span>`).join('');
+        document.getElementById('secStyleTitle').innerHTML = `${iconImg(icons.styles[pop.runes.sub_style_id], 'style-title-icon')}Rama Secundaria: ${escapeHtml(pop.runes.sub_style_name)}`;
+        document.getElementById('secRunesList').innerHTML = pop.runes.secondary_runes.map(r => iconPill(r.name, icons.perks[r.id])).join('');
 
         // Shards
-        document.getElementById('modRunesList').innerHTML = pop.runes.shards.map(s => `<span class="rune-pill">${s.name}</span>`).join('');
+        document.getElementById('modRunesList').innerHTML = pop.runes.shards.map(s => iconPill(s.name, icons.perks[s.id])).join('');
 
         // Hechizos y habilidades
-        document.getElementById('sumsPill').innerText = `Hechizos: ${pop.summoner_spells.map(s => s.name).join(' + ')}`;
+        document.getElementById('sumsList').innerHTML = pop.summoner_spells.map(s => iconPill(s.name, icons.spells[s.id])).join('');
         document.getElementById('skillsPill').innerText = `Maxeo: ${pop.skills.priority}`;
 
         // Items
-        document.getElementById('startItemsList').innerHTML = pop.items.starting.map(i => `<span class="rune-pill">${i.name}</span>`).join('');
-        document.getElementById('coreItemsList').innerHTML = pop.items.core.map(i => `<span class="rune-pill" style="border-color: #2563eb;">${i.name}</span>`).join('');
+        document.getElementById('startItemsList').innerHTML = pop.items.starting.map(i => iconPill(i.name, itemIcon(i.id))).join('');
+        document.getElementById('coreItemsList').innerHTML = pop.items.core.map(i => iconPill(i.name, itemIcon(i.id), 'border-color: #2563eb;')).join('');
     }).catch(err => {
-        document.getElementById('buildEmptyState').innerHTML = `<h3 style="color: #ef4444;">Error al cargar la build</h3><p>${err}</p>`;
+        document.getElementById('buildEmptyState').innerHTML = `<h3 style="color: #ef4444;">Error al cargar la build</h3><p>${escapeHtml(err)}</p>`;
     });
+
+    // Consultar roles viables del campeón para indicar cuáles están disponibles
+    if (window.pywebview.api.get_champion_roles) {
+        window.pywebview.api.get_champion_roles(champName).then(roles => {
+            const roleBtns = document.querySelectorAll('.build-role-btn');
+            roleBtns.forEach(btn => {
+                const r = btn.getAttribute('data-role');
+                if (r === 'all') return;
+                const isViable = roles.includes(r) || (r === 'mid' && roles.includes('middle')) || (r === 'adc' && roles.includes('bottom'));
+                if (isViable) {
+                    btn.style.opacity = '1';
+                    btn.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+                } else {
+                    btn.style.opacity = '0.6';
+                    btn.style.borderColor = '#233045';
+                }
+            });
+        });
+    }
 }
 
 // 3. Comprobar conexion con el LoL local
@@ -456,11 +566,11 @@ function refreshLobby(force = false) {
                 <div style="display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; margin-bottom: 12px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <img src="https://cdn5.lolalytics.com/champx46/${mySlug}.webp" style="width: 32px; height: 32px; border-radius: 6px;" onerror="this.style.display='none'">
-                        <span style="color: #38bdf8;">${m.my_champion}</span>
+                        <span style="color: #38bdf8;">${escapeHtml(m.my_champion)}</span>
                     </div>
                     <span style="font-size: 13px; color: #64748b;">VS</span>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="color: #f43f5e;">${m.enemy_champion}</span>
+                        <span style="color: #f43f5e;">${escapeHtml(m.enemy_champion)}</span>
                         <img src="https://cdn5.lolalytics.com/champx46/${enemySlug}.webp" style="width: 32px; height: 32px; border-radius: 6px;" onerror="this.style.display='none'">
                     </div>
                     <span style="color: ${wrColor}; font-size: 14px; margin-left: 16px;">${m.winrate}% Winrate (${m.games.toLocaleString()} partidas)</span>
@@ -484,16 +594,16 @@ function refreshLobby(force = false) {
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <img src="https://cdn5.lolalytics.com/champx46/${enemySlug}.webp" style="width: 28px; height: 28px; border-radius: 6px;">
-                        <span style="font-weight: 800; font-size: 13px; color: #e2e8f0;">Rival eligió a <strong style="color: #f43f5e;">${cs.enemy_champion}</strong>. ¡Counters recomendados para ganar la línea!</span>
+                        <span style="font-weight: 800; font-size: 13px; color: #e2e8f0;">Rival eligió a <strong style="color: #f43f5e;">${escapeHtml(cs.enemy_champion)}</strong>. ¡Counters recomendados para ganar la línea!</span>
                     </div>
                     <span style="font-size: 11px; color: #818cf8; font-weight: 600;">Lolalytics Meta</span>
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px;">
                     ${cs.counters.map(c => `
-                        <div class="counter-card-item" style="padding: 6px 12px; flex: 1 1 auto; max-width: 220px;" onclick="switchToBuild('${c.name.replace(/'/g, "\\'")}')">
+                        <div class="counter-card-item" style="padding: 6px 12px; flex: 1 1 auto; max-width: 220px;" data-action="open-build" data-champ="${escapeHtml(c.name)}">
                             <div class="counter-item-info">
-                                <img src="${c.avatar_url}" style="width: 26px; height: 26px; border-radius: 6px;">
-                                <strong style="font-size: 12px; color: #fff;">${c.name}</strong>
+                                <img src="${escapeHtml(c.avatar_url)}" style="width: 26px; height: 26px; border-radius: 6px;">
+                                <strong style="font-size: 12px; color: #fff;">${escapeHtml(c.name)}</strong>
                             </div>
                             <span style="color: #22c55e; font-weight: 700; font-size: 12px;">${c.winrate}%</span>
                         </div>
@@ -523,21 +633,21 @@ function refreshLobby(force = false) {
             const isMeClass = p.is_me ? 'is-me' : '';
             const rankStr = p.rank.tier !== 'UNRANKED' && p.rank.tier !== 'ANONIMO' ? `${p.rank.tier} ${p.rank.division} (${p.rank.lp} LP)` : p.rank.tier;
             const wrStr = p.rank.tier !== 'UNRANKED' && p.rank.tier !== 'ANONIMO' ? `${p.rank.winrate}% WR` : '';
-            const champStr = p.champion_name ? `<span style="color: #f1f5f9; font-weight: 700;">${p.champion_name}</span>` : 'Eligiendo...';
+            const champStr = p.champion_name ? `<span style="color: #f1f5f9; font-weight: 700;">${escapeHtml(p.champion_name)}</span>` : 'Eligiendo...';
 
             let badgesHtml = '';
             (p.badges || []).forEach(b => {
                 let badgeClass = 'badge-info';
                 if (b.includes('RACHA') || b.includes('ALTO')) badgeClass = 'badge-streak';
                 if (b.includes('TILT') || b.includes('MUERE')) badgeClass = 'badge-tilt';
-                badgesHtml += `<div class="badge-pill ${badgeClass}">${b}</div>`;
+                badgesHtml += `<div class="badge-pill ${badgeClass}">${escapeHtml(b)}</div>`;
             });
 
             return `
                 <div class="scout-card ${isMeClass}">
                     <div class="scout-header">
-                        <span class="player-name">${p.name} ${p.is_me ? '(TU)' : ''}</span>
-                        <span class="player-role">${p.assigned_position || 'FILL'}</span>
+                        <span class="player-name">${escapeHtml(p.name)} ${p.is_me ? '(TU)' : ''}</span>
+                        <span class="player-role">${escapeHtml(p.assigned_position || 'FILL')}</span>
                     </div>
 
                     <div style="font-size: 13px; color: #cbd5e1; margin-top: 2px;">
@@ -552,7 +662,7 @@ function refreshLobby(force = false) {
                     </div>
 
                     <div style="font-size: 11px; color: #94a3b8;">
-                        <strong>Champs:</strong> ${p.top_champions.join(', ') || 'Sin datos'}
+                        <strong>Champs:</strong> ${escapeHtml(p.top_champions.join(', ')) || 'Sin datos'}
                     </div>
 
                     <div class="badges-container">
@@ -699,7 +809,7 @@ function renderTeamBalance(tb, container) {
                     ${key.ally_mvp ? `
                         <div class="tb-key-item">
                             <div class="tb-key-title">
-                                <span style="color: #38bdf8;">👑 ${key.ally_mvp.champion} (${key.ally_mvp.name})</span>
+                                <span style="color: #38bdf8;">👑 ${escapeHtml(key.ally_mvp.champion)} (${escapeHtml(key.ally_mvp.name)})</span>
                                 <span class="tb-key-role" style="color: #38bdf8;">${key.ally_mvp.role}</span>
                             </div>
                             <div class="tb-key-sub">Tu Mejor Apuesta: ${key.ally_mvp.reason}</div>
@@ -709,7 +819,7 @@ function renderTeamBalance(tb, container) {
                     ${key.enemy_threat ? `
                         <div class="tb-key-item" style="border-color: rgba(244, 63, 94, 0.4);">
                             <div class="tb-key-title">
-                                <span style="color: #f43f5e;">⚠️ ${key.enemy_threat.champion} (${key.enemy_threat.name})</span>
+                                <span style="color: #f43f5e;">⚠️ ${escapeHtml(key.enemy_threat.champion)} (${escapeHtml(key.enemy_threat.name)})</span>
                                 <span class="tb-key-role" style="color: #f43f5e;">${key.enemy_threat.role}</span>
                             </div>
                             <div class="tb-key-sub">Mayor Amenaza Rival: ${key.enemy_threat.reason}</div>
@@ -719,7 +829,7 @@ function renderTeamBalance(tb, container) {
                     ${key.enemy_weak_link ? `
                         <div class="tb-key-item" style="border-color: rgba(245, 158, 11, 0.3);">
                             <div class="tb-key-title">
-                                <span style="color: #f59e0b;">🎯 ${key.enemy_weak_link.champion} (${key.enemy_weak_link.name})</span>
+                                <span style="color: #f59e0b;">🎯 ${escapeHtml(key.enemy_weak_link.champion)} (${escapeHtml(key.enemy_weak_link.name)})</span>
                                 <span class="tb-key-role" style="color: #f59e0b;">${key.enemy_weak_link.role}</span>
                             </div>
                             <div class="tb-key-sub">Objetivo Vulnerable: ${key.enemy_weak_link.reason}</div>
@@ -815,7 +925,7 @@ function initMatchupSearch() {
                             <div class="champ-profile">
                                 <img class="champ-profile-img" src="https://cdn5.lolalytics.com/champx46/${mySlug}.webp" onerror="this.style.display='none'">
                                 <div>
-                                    <div style="font-size: 16px; font-weight: 800; color: #fff;">${m.my_champion}</div>
+                                    <div style="font-size: 16px; font-weight: 800; color: #fff;">${escapeHtml(m.my_champion)}</div>
                                     <div style="font-size: 12px; color: #38bdf8; font-weight: 600;">Tu Campeón</div>
                                 </div>
                             </div>
@@ -823,7 +933,7 @@ function initMatchupSearch() {
                             <div class="champ-profile">
                                 <img class="champ-profile-img" src="https://cdn5.lolalytics.com/champx46/${enemySlug}.webp" onerror="this.style.display='none'">
                                 <div>
-                                    <div style="font-size: 16px; font-weight: 800; color: #fff;">${m.enemy_champion}</div>
+                                    <div style="font-size: 16px; font-weight: 800; color: #fff;">${escapeHtml(m.enemy_champion)}</div>
                                     <div style="font-size: 12px; color: #f43f5e; font-weight: 600;">Rival</div>
                                 </div>
                             </div>
@@ -834,9 +944,9 @@ function initMatchupSearch() {
 
                     <div class="matchup-wr-bar-container">
                         <div class="matchup-wr-labels">
-                            <span style="color: #22c55e;">${m.my_champion}: ${wrPercent}%</span>
+                            <span style="color: #22c55e;">${escapeHtml(m.my_champion)}: ${wrPercent}%</span>
                             <span style="color: #94a3b8; font-size: 11px;">${m.games.toLocaleString()} partidas analizadas</span>
-                            <span style="color: #ef4444;">${m.enemy_champion}: ${enemyWr}%</span>
+                            <span style="color: #ef4444;">${escapeHtml(m.enemy_champion)}: ${enemyWr}%</span>
                         </div>
                         <div class="wr-progress-bar">
                             <div class="wr-progress-fill" style="width: ${wrPercent}%;"></div>
@@ -853,7 +963,7 @@ function initMatchupSearch() {
             `;
         }).catch(err => {
             emptyState1v1.style.display = 'block';
-            emptyState1v1.innerHTML = `<h3 style="color: #ef4444;">Error al consultar el matchup</h3><p>${err}</p>`;
+            emptyState1v1.innerHTML = `<h3 style="color: #ef4444;">Error al consultar el matchup</h3><p>${escapeHtml(err)}</p>`;
         });
     };
 
@@ -878,7 +988,7 @@ function initMatchupSearch() {
         }
 
         emptyStateCounters.style.display = 'block';
-        emptyStateCounters.innerHTML = `<h3>Obteniendo mejores y peores enfrentamientos de ${champ} en Lolalytics...</h3>`;
+        emptyStateCounters.innerHTML = `<h3>Obteniendo mejores y peores enfrentamientos de ${escapeHtml(champ)} en Lolalytics...</h3>`;
         resultContentCounters.style.display = 'none';
 
         if (!window.pywebview || !window.pywebview.api) return;
@@ -889,11 +999,11 @@ function initMatchupSearch() {
             resultContentCounters.style.display = 'block';
 
             const worstHtml = (data.worst || []).map(c => `
-                <div class="counter-card-item" onclick="directCompareFromCounter('${data.champion}', '${c.name}')">
+                <div class="counter-card-item" data-action="compare" data-my-champ="${escapeHtml(data.champion)}" data-enemy-champ="${escapeHtml(c.name)}">
                     <div class="counter-item-info">
-                        <img class="counter-avatar" src="${c.avatar_url}" onerror="this.style.display='none'">
+                        <img class="counter-avatar" src="${escapeHtml(c.avatar_url)}" onerror="this.style.display='none'">
                         <div>
-                            <div style="font-weight: 700; color: #fff; font-size: 13px;">${c.name}</div>
+                            <div style="font-weight: 700; color: #fff; font-size: 13px;">${escapeHtml(c.name)}</div>
                             <div style="font-size: 11px; color: #94a3b8;">${c.games.toLocaleString()} partidas</div>
                         </div>
                     </div>
@@ -905,11 +1015,11 @@ function initMatchupSearch() {
             `).join('');
 
             const bestHtml = (data.best || []).map(c => `
-                <div class="counter-card-item" onclick="directCompareFromCounter('${data.champion}', '${c.name}')">
+                <div class="counter-card-item" data-action="compare" data-my-champ="${escapeHtml(data.champion)}" data-enemy-champ="${escapeHtml(c.name)}">
                     <div class="counter-item-info">
-                        <img class="counter-avatar" src="${c.avatar_url}" onerror="this.style.display='none'">
+                        <img class="counter-avatar" src="${escapeHtml(c.avatar_url)}" onerror="this.style.display='none'">
                         <div>
-                            <div style="font-weight: 700; color: #fff; font-size: 13px;">${c.name}</div>
+                            <div style="font-weight: 700; color: #fff; font-size: 13px;">${escapeHtml(c.name)}</div>
                             <div style="font-size: 11px; color: #94a3b8;">${c.games.toLocaleString()} partidas</div>
                         </div>
                     </div>
@@ -926,7 +1036,7 @@ function initMatchupSearch() {
                         <div class="counter-col-header">
                             <div>
                                 <h3 style="font-size: 14px; font-weight: 800; color: #ef4444;">🔴 PEORES ENFRENTAMIENTOS</h3>
-                                <p style="font-size: 11px; color: #94a3b8;">Campeones que más vencen a ${data.champion}</p>
+                                <p style="font-size: 11px; color: #94a3b8;">Campeones que más vencen a ${escapeHtml(data.champion)}</p>
                             </div>
                             <span class="rune-pill" style="border-color: #ef4444; color: #ef4444;">Counters</span>
                         </div>
@@ -939,7 +1049,7 @@ function initMatchupSearch() {
                         <div class="counter-col-header">
                             <div>
                                 <h3 style="font-size: 14px; font-weight: 800; color: #22c55e;">🟢 MEJORES ENFRENTAMIENTOS</h3>
-                                <p style="font-size: 11px; color: #94a3b8;">Campeones que ${data.champion} más destruye</p>
+                                <p style="font-size: 11px; color: #94a3b8;">Campeones que ${escapeHtml(data.champion)} más destruye</p>
                             </div>
                             <span class="rune-pill" style="border-color: #22c55e; color: #22c55e;">Ventaja</span>
                         </div>
@@ -951,7 +1061,7 @@ function initMatchupSearch() {
             `;
         }).catch(err => {
             emptyStateCounters.style.display = 'block';
-            emptyStateCounters.innerHTML = `<h3 style="color: #ef4444;">Error al cargar counters</h3><p>${err}</p>`;
+            emptyStateCounters.innerHTML = `<h3 style="color: #ef4444;">Error al cargar counters</h3><p>${escapeHtml(err)}</p>`;
         });
     };
 
@@ -1083,11 +1193,11 @@ function renderProfileData(data) {
                 const wrColor = c.winrate >= 50 ? '#22c55e' : '#ef4444';
                 const kdaColor = c.kda_ratio >= 3.0 ? '#22c55e' : (c.kda_ratio >= 2.0 ? '#38bdf8' : '#94a3b8');
                 return `
-                    <div class="most-played-item" style="cursor: pointer;" onclick="switchToBuild('${c.champion_name.replace(/'/g, "\\'")}')">
+                    <div class="most-played-item" style="cursor: pointer;" data-action="open-build" data-champ="${escapeHtml(c.champion_name)}">
                         <div class="most-played-left">
                             <img class="most-played-avatar" src="https://cdn5.lolalytics.com/champx46/${c.champion_slug}.webp" onerror="this.style.display='none'">
                             <div>
-                                <div class="most-played-name">${c.champion_name}</div>
+                                <div class="most-played-name">${escapeHtml(c.champion_name)}</div>
                                 <div class="most-played-cs">CS ${c.avg_cs} • ${c.games} ${c.games === 1 ? 'partida' : 'partidas'}</div>
                             </div>
                         </div>
@@ -1114,7 +1224,7 @@ function renderProfileData(data) {
                 <div class="summary-champ-row">
                     <div class="summary-champ-left">
                         <img src="https://cdn5.lolalytics.com/champx46/${rc.champion_slug}.webp" onerror="this.style.display='none'">
-                        <strong style="color: #fff; font-size: 11px;">${rc.champion_name}</strong>
+                        <strong style="color: #fff; font-size: 11px;">${escapeHtml(rc.champion_name)}</strong>
                     </div>
                     <div style="font-size: 11px;">
                         <span style="color: ${rc.winrate >= 50 ? '#22c55e' : '#ef4444'}; font-weight: 700;">${rc.winrate}%</span>
@@ -1240,9 +1350,9 @@ function renderMatchesList(matches, ddragonVer) {
         const renderMiniPlayer = (p) => {
             const isMeClass = p.is_me ? 'is-me' : '';
             return `
-                <div class="match-mini-player ${isMeClass}" title="${p.name} (${p.champion_name})">
+                <div class="match-mini-player ${isMeClass}" title="${escapeHtml(p.name)} (${escapeHtml(p.champion_name)})">
                     <img src="https://cdn5.lolalytics.com/champx46/${p.champion_slug}.webp" onerror="this.style.display='none'">
-                    <span>${p.name.split('#')[0].slice(0, 8)}</span>
+                    <span>${escapeHtml(p.name.split('#')[0].slice(0, 8))}</span>
                 </div>
             `;
         };
@@ -1254,7 +1364,7 @@ function renderMatchesList(matches, ddragonVer) {
             <div class="match-card ${resultClass}">
                 <!-- Info Cola y Tiempo -->
                 <div class="match-info-col">
-                    <span class="match-queue-name">${m.queue_name}</span>
+                    <span class="match-queue-name">${escapeHtml(m.queue_name)}</span>
                     <span class="match-time-ago">${m.time_ago}</span>
                     <span class="match-result-text">${resultText}</span>
                     <span class="match-duration">${m.duration_str}</span>
@@ -1262,7 +1372,7 @@ function renderMatchesList(matches, ddragonVer) {
 
                 <!-- Campeón, Nivel y Hechizos -->
                 <div class="match-champ-col">
-                    <div class="match-avatar-wrapper" style="cursor: pointer;" onclick="switchToBuild('${m.champion_name.replace(/'/g, "\\'")}')">
+                    <div class="match-avatar-wrapper" style="cursor: pointer;" data-action="open-build" data-champ="${escapeHtml(m.champion_name)}">
                         <img class="match-avatar-img" src="https://cdn5.lolalytics.com/champx46/${m.champion_slug}.webp" onerror="this.style.display='none'">
                         <div class="match-level-badge">${m.champ_level}</div>
                     </div>
@@ -1270,7 +1380,7 @@ function renderMatchesList(matches, ddragonVer) {
                         <img class="match-spell-icon" src="https://ddragon.leagueoflegends.com/cdn/${ddragonVer}/img/spell/${m.spell1_name}.png" onerror="this.style.display='none'">
                         <img class="match-spell-icon" src="https://ddragon.leagueoflegends.com/cdn/${ddragonVer}/img/spell/${m.spell2_name}.png" onerror="this.style.display='none'">
                     </div>
-                    <div style="font-size: 12px; font-weight: 700; color: #f1f5f9;">${m.champion_name}</div>
+                    <div style="font-size: 12px; font-weight: 700; color: #f1f5f9;">${escapeHtml(m.champion_name)}</div>
                 </div>
 
                 <!-- KDA, CS y Participación -->
@@ -1344,7 +1454,7 @@ function renderPostGameAutopsy(data) {
             <img class="autopsy-champ-img" src="https://cdn5.lolalytics.com/champx46/${data.champion_slug}.webp" onerror="this.style.display='none'">
             <div>
                 <div class="autopsy-title-tag" style="color: ${titleColor};">🔬 ${data.verdict_title}</div>
-                <div class="autopsy-champ-meta">${data.champion_name} • ${data.duration_str}</div>
+                <div class="autopsy-champ-meta">${escapeHtml(data.champion_name)} • ${data.duration_str}</div>
             </div>
         </div>
         <div class="autopsy-stats-strip">

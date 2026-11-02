@@ -13,6 +13,7 @@ from scout import ScoutService
 from profile_service import ProfileService
 from postgame_service import PostGameService
 from hotkey_manager import GlobalHotkeyManager
+from ddragon import get_ddragon
 
 class AppAPI:
     """
@@ -111,9 +112,35 @@ class AppAPI:
         """Obtiene la Tier List de Lolalytics."""
         return self._lolalytics.get_tierlist(lane=lane)
 
-    def get_champion_build(self, champion_name: str) -> Dict[str, Any]:
-        """Obtiene la build completa (runas e items) de un campeón."""
-        return self._lolalytics.get_champion_build(champion_name)
+    def get_champion_build(self, champion_name: str, lane: str = "") -> Dict[str, Any]:
+        """Obtiene la build completa (runas e items) de un campeón para un rol opcional."""
+        norm_lane = lane.lower() if lane and lane.lower() != "all" else None
+        if norm_lane == "mid":
+            norm_lane = "middle"
+        elif norm_lane == "adc":
+            norm_lane = "bottom"
+        build = self._lolalytics.get_champion_build(champion_name, lane=norm_lane)
+        # Versión e iconos de Data Dragon (copia: la build cacheada no se modifica)
+        return {**build, "ddragon_version": get_ddragon().version, "icons": self._build_icons(build)}
+
+    def _build_icons(self, build: Dict[str, Any]) -> Dict[str, Dict[str, Optional[str]]]:
+        """URLs de iconos, por ID, de las runas, fragmentos, ramas y hechizos de una build."""
+        dd = get_ddragon()
+        icons: Dict[str, Dict[str, Optional[str]]] = {"perks": {}, "styles": {}, "spells": {}}
+        for variant in ("most_popular", "highest_winrate"):
+            data = build.get(variant) or {}
+            runes = data.get("runes", {})
+            for perk in runes.get("primary_runes", []) + runes.get("secondary_runes", []) + runes.get("shards", []):
+                icons["perks"][str(perk["id"])] = dd.perk_icon_url(perk["id"])
+            for style_id in (runes.get("primary_style_id"), runes.get("sub_style_id")):
+                icons["styles"][str(style_id)] = dd.style_icon_url(style_id)
+            for spell in data.get("summoner_spells", []):
+                icons["spells"][str(spell["id"])] = dd.spell_icon_url(spell["id"])
+        return icons
+
+    def get_champion_roles(self, champion_name: str) -> List[str]:
+        """Obtiene la lista de roles viables para este campeón (ej: Lux -> ['middle', 'support'])."""
+        return self._lolalytics.get_champion_viable_roles(champion_name)
 
     def get_matchup(self, my_champion: str, enemy_champion: str, lane: str = "") -> Dict[str, Any]:
         """Obtiene el análisis de enfrentamiento directo entre dos campeones."""
@@ -123,16 +150,22 @@ class AppAPI:
         """Obtiene la lista de los mejores y peores enfrentamientos (counters) de un campeón."""
         return self._lolalytics.get_champion_counters(champion_name, lane or None)
 
-    def apply_runes_and_items(self, champion_name: str) -> bool:
-        """Inyecta tanto la página de runas como el conjunto de objetos en la tienda de LoL."""
+    def apply_runes_and_items(self, champion_name: str, lane: str = "", inject_all_roles: bool = True) -> bool:
+        """Inyecta tanto la página de runas del rol actual como los Item Sets multi-rol en la tienda de LoL."""
         if not self._lcu.session:
             self._lcu.connect()
         try:
-            build_data = self._lolalytics.get_champion_build(champion_name)
+            norm_lane = lane.lower() if lane and lane.lower() != "all" else None
+            if norm_lane == "mid":
+                norm_lane = "middle"
+            elif norm_lane == "adc":
+                norm_lane = "bottom"
+
+            build_data = self._lolalytics.get_champion_build(champion_name, lane=norm_lane)
             pop = build_data["most_popular"]["runes"]
             payload = pop["lcu_payload"]
             
-            # 1. Inyectar runas
+            # 1. Inyectar runas correspondientes al rol
             rune_ok = self._lcu.apply_rune_page(
                 payload["name"],
                 payload["primaryStyleId"],
@@ -140,14 +173,15 @@ class AppAPI:
                 payload["selectedPerkIds"]
             )
             
-            # 2. Inyectar conjunto de objetos (Item Set)
-            champ_id = None
-            for cid, name in self._lcu._champions_cache.items():
-                if name.lower() == champion_name.lower():
-                    champ_id = cid
-                    break
+            # 2. Inyectar conjunto de objetos (Item Sets)
+            champ_id = self._lcu.get_champion_id(champion_name)
             
-            self._lcu.inject_item_set_for_champion(champion_name, champ_id or 0, build_data)
+            if inject_all_roles:
+                multi_builds = self._lolalytics.get_champion_multi_builds(champion_name, requested_lane=norm_lane)
+                self._lcu.inject_multi_build_item_sets(champion_name, champ_id or 0, multi_builds, active_role=norm_lane or "")
+            else:
+                self._lcu.inject_item_set_for_champion(champion_name, champ_id or 0, build_data, role_name=norm_lane or "")
+
             return rune_ok
         except Exception as e:
             print(f"[!] Error al aplicar runas e items: {e}")
@@ -238,9 +272,22 @@ class AppAPI:
                         champ_id = status.get("champion_id")
                         champ_name = status.get("champion_name")
                         role = status.get("role")
+
+                        norm_lane = None
+                        if role:
+                            r = role.lower()
+                            if r in ("middle", "mid"):
+                                norm_lane = "middle"
+                            elif r in ("utility", "support"):
+                                norm_lane = "support"
+                            elif r in ("bottom", "adc"):
+                                norm_lane = "bottom"
+                            elif r in ("top", "jungle"):
+                                norm_lane = r
+
                         if champ_id and champ_id != self._last_applied_champ_id and champ_name:
-                            print(f"[LCU WebSocket 0ms] Lock-in detectado: {champ_name} ({role})! Inyectando runas e Item Set...")
-                            build_data = self._lolalytics.get_champion_build(champ_name)
+                            print(f"[LCU WebSocket 0ms] Lock-in: {champ_name} ({norm_lane or role})! Inyectando runas e Item Sets multi-rol...")
+                            build_data = self._lolalytics.get_champion_build(champ_name, lane=norm_lane)
                             pop = build_data["most_popular"]["runes"]
                             payload = pop["lcu_payload"]
                             self._lcu.apply_rune_page(
@@ -249,7 +296,9 @@ class AppAPI:
                                 payload["subStyleId"],
                                 payload["selectedPerkIds"]
                             )
-                            self._lcu.inject_item_set_for_champion(champ_name, champ_id, build_data)
+                            # Inyectar Item Sets multi-rol (rol asignado + sets alternativos/combinados)
+                            multi_builds = self._lolalytics.get_champion_multi_builds(champ_name, requested_lane=norm_lane)
+                            self._lcu.inject_multi_build_item_sets(champ_name, champ_id, multi_builds, active_role=norm_lane or "")
                             self._last_applied_champ_id = champ_id
                     elif not status:
                         self._last_applied_champ_id = None
@@ -273,8 +322,21 @@ class AppAPI:
                             if status and status.get("is_locked_in"):
                                 champ_id = status.get("champion_id")
                                 champ_name = status.get("champion_name")
+                                role = status.get("role")
+                                norm_lane = None
+                                if role:
+                                    r = role.lower()
+                                    if r in ("middle", "mid"):
+                                        norm_lane = "middle"
+                                    elif r in ("utility", "support"):
+                                        norm_lane = "support"
+                                    elif r in ("bottom", "adc"):
+                                        norm_lane = "bottom"
+                                    elif r in ("top", "jungle"):
+                                        norm_lane = r
+
                                 if champ_id and champ_id != self._last_applied_champ_id and champ_name:
-                                    build_data = self._lolalytics.get_champion_build(champ_name)
+                                    build_data = self._lolalytics.get_champion_build(champ_name, lane=norm_lane)
                                     pop = build_data["most_popular"]["runes"]
                                     payload = pop["lcu_payload"]
                                     self._lcu.apply_rune_page(
@@ -283,7 +345,8 @@ class AppAPI:
                                         payload["subStyleId"],
                                         payload["selectedPerkIds"]
                                     )
-                                    self._lcu.inject_item_set_for_champion(champ_name, champ_id, build_data)
+                                    multi_builds = self._lolalytics.get_champion_multi_builds(champ_name, requested_lane=norm_lane)
+                                    self._lcu.inject_multi_build_item_sets(champ_name, champ_id, multi_builds, active_role=norm_lane or "")
                                     self._last_applied_champ_id = champ_id
                             elif not status:
                                 self._last_applied_champ_id = None
@@ -308,9 +371,9 @@ def main():
         title="LoL Companion - Lolalytics & LCU",
         url=html_file,
         js_api=api,
-        width=1180,
-        height=760,
-        min_size=(950, 600),
+        width=1340,
+        height=820,
+        min_size=(1080, 640),
         background_color="#0b0e14"
     )
     api._window = window

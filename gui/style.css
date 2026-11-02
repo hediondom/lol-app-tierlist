@@ -435,6 +435,99 @@ main {
     overflow: hidden;
 }
 
+.meta-tier-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.meta-tier-table th {
+    background: #182234;
+    padding: 12px 14px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #1f2937;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.meta-tier-table th:hover {
+    background: #1e2d42;
+    color: #ffffff;
+}
+
+.meta-tier-table th.sort-active {
+    color: #38bdf8;
+    background: #1a283b;
+    border-bottom: 2px solid #38bdf8;
+}
+
+.meta-tier-table th .sort-icon {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    color: #64748b;
+    transition: color 0.15s;
+}
+
+.meta-tier-table th.sort-active .sort-icon {
+    color: #38bdf8;
+    font-weight: 800;
+}
+
+.meta-tier-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1f2937;
+    color: #cbd5e1;
+}
+
+.meta-tier-table tr:hover {
+    background: rgba(56, 189, 248, 0.05);
+    cursor: pointer;
+}
+
+/* Distribución exacta y proporcional de columnas */
+.meta-tier-table .col-rank {
+    width: 8%;
+    text-align: center;
+}
+
+.meta-tier-table .col-tier {
+    width: 9%;
+    text-align: center;
+}
+
+.meta-tier-table .col-champ {
+    width: 27%;
+    text-align: left;
+}
+
+.meta-tier-table .col-lane {
+    width: 12%;
+    text-align: center;
+}
+
+.meta-tier-table .col-wr {
+    width: 16%;
+    text-align: center;
+}
+
+.meta-tier-table .col-pr {
+    width: 14%;
+    text-align: center;
+}
+
+.meta-tier-table .col-br {
+    width: 14%;
+    text-align: center;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -531,6 +624,50 @@ tr:hover {
     gap: 12px;
 }
 
+.build-role-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    background: #0d131f;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid #1f293d;
+}
+
+.build-role-label {
+    font-size: 11px;
+    font-weight: 800;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.build-role-btn {
+    background: #151d2c;
+    border: 1px solid #233045;
+    color: #94a3b8;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.build-role-btn:hover {
+    background: #1e293b;
+    color: #fff;
+    border-color: #38bdf8;
+}
+
+.build-role-btn.active {
+    background: #2563eb;
+    color: #fff;
+    border-color: #38bdf8;
+    box-shadow: 0 0 10px rgba(37, 99, 235, 0.4);
+}
+
 .search-input {
     flex: 1;
     background: #111827;
@@ -606,6 +743,29 @@ tr:hover {
     color: #e2e8f0;
 }
 
+/* Runas, hechizos y objetos con icono (Data Dragon) */
+.icon-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px 3px 3px;
+}
+
+.icon-pill-img {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    object-fit: cover;
+}
+
+.style-title-icon {
+    width: 18px;
+    height: 18px;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
 .btn-primary {
     background: #2563eb;
     color: #fff;
@@ -622,6 +782,23 @@ tr:hover {
 
 .btn-primary:hover {
     background: #1d4ed8;
+}
+
+.btn-secondary {
+    background: #1e293b;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-secondary:hover {
+    background: #273449;
+    border-color: #475569;
 }
 
 /* Vista 3: Scouting */
@@ -1267,9 +1444,18 @@ tr:hover {
 
 .profile-main-layout {
     display: grid;
-    grid-template-columns: 290px 1fr;
+    grid-template-columns: 250px minmax(0, 1fr);
     gap: 16px;
     align-items: start;
+    min-width: 0;
+}
+
+.profile-left-col {
+    min-width: 0;
+}
+
+.profile-right-col {
+    min-width: 0;
 }
 
 .opgg-card {
@@ -1393,12 +1579,13 @@ tr:hover {
 /* Recent Summary Header Card (Donut + Stats + Role Bars) */
 .recent-summary-card {
     display: grid;
-    grid-template-columns: 140px 170px 1fr 140px;
-    gap: 16px;
+    grid-template-columns: 125px 145px minmax(0, 1fr) 130px;
+    gap: 12px;
     align-items: center;
-    padding: 16px 20px;
+    padding: 14px 16px;
     margin-bottom: 14px;
     background: #111827;
+    min-width: 0;
 }
 
 .summary-donut-col {
@@ -1532,12 +1719,13 @@ tr:hover {
 
 .match-card {
     display: grid;
-    grid-template-columns: 105px 150px 130px 110px 1fr;
-    gap: 12px;
+    grid-template-columns: 85px 125px 115px 95px minmax(130px, 1fr);
+    gap: 10px;
     align-items: center;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 10px 12px;
     transition: transform 0.15s, border-color 0.15s;
+    min-width: 0;
 }
 
 .match-card:hover {
@@ -1691,18 +1879,27 @@ tr:hover {
 .match-players-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 2px 10px;
+    gap: 2px 8px;
     font-size: 11px;
+    min-width: 0;
 }
 
 .match-mini-player {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
     color: #94a3b8;
+    min-width: 0;
+}
+
+.match-mini-player span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .match-mini-player.is-me {
@@ -1809,8 +2006,9 @@ tr:hover {
 
 .autopsy-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 14px;
+    min-width: 0;
 }
 
 .autopsy-section-title {

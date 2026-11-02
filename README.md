@@ -17,10 +17,17 @@ Ya se encuentra compilado y listo para usar:
 Para volver a compilarlo tú mismo en cualquier momento, solo haz doble clic en [build_exe.bat](file:///C:/Users/agust/.gemini/antigravity/scratch/lol-companion/build_exe.bat).
 
 ### Opción 2: Desde el Código Fuente
-Hacer **doble clic en `run_app.bat`** o ejecutar:
+La primera vez, instalar las dependencias:
+```bash
+pip install -r requirements.txt
+```
+
+Después, hacer **doble clic en `run_app.bat`** o ejecutar:
 ```bash
 python app_gui.py
 ```
+
+*Opcional:* para completar el scouting con la API oficial de Riot, definir la variable de entorno `RIOT_API_KEY` o añadir `"riot_api_key"` en `config.json` (archivo local, no se versiona).
 
 ---
 
@@ -55,9 +62,10 @@ python app_gui.py
    - **Historial de Partidas:** Tarjetas detalladas de tus últimas 20 partidas (Victoria en azul / Derrota en rojo, KDA, CS/min, 6 objetos finales + baratija, hechizos y vista previa de los 10 jugadores).
    - **Filtros rápidos:** Filtra instantáneamente por Todas, SoloQ, Flex, Normal o ARAM.
 
-6. **🖥️ Superponer App sobre el Juego (Atajo Global `Ctrl + X`):**
-   - **Tecla de Acceso Rápido Configurable:** Presiona **`Ctrl + X`** (o tu combinación preferida: `Ctrl + X`, `Ctrl + O`, `F2`, `F6`, etc.) para traer instantáneamente la interfaz completa de la app al frente superpuesta sobre League of Legends.
-   - Vuelve a presionar **`Ctrl + X`** para minimizarla y regresar al juego sin interrupciones.
+6. **🖥️ Superponer App sobre el Juego (Atajo Global `Ctrl + Shift + X`):**
+   - **Tecla de Acceso Rápido Configurable:** Presiona **`Ctrl + Shift + X`** (o tu combinación preferida: `Alt + X`, `F6`, `F9`, etc.) para traer instantáneamente la interfaz completa de la app al frente superpuesta sobre League of Legends.
+   - Vuelve a presionar **`Ctrl + Shift + X`** para minimizarla y regresar al juego sin interrupciones.
+   - El atajo se registra en todo Windows: mientras la app está abierta, esa combinación deja de funcionar en otros programas (por eso no se recomienda `Ctrl + X`, que es "Cortar").
    - *Nota:* Para que la app se dibuje directamente por encima de League of Legends, asegúrate de tener el juego configurado en **"Ventana sin bordes" (Borderless)** en las opciones de video de LoL (como Porofessor y Blitz).
 
 6. **⚡ Auto-Runas & Objetos en la Tienda del Juego:**

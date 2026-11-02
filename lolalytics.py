@@ -1,10 +1,9 @@
-import os
-import sys
 import re
 import json
 import requests
 from bs4 import BeautifulSoup
 from typing import Dict, List, Any, Optional
+from ddragon import get_ddragon
 
 # Mapeo de estilos principales de runas en League of Legends
 STYLE_NAMES = {
@@ -15,6 +14,7 @@ STYLE_NAMES = {
     8400: "Resolve"
 }
 
+# Respaldo si Data Dragon no está disponible (las runas nuevas se resuelven con ddragon.py)
 RUNE_TO_STYLE = {
     # Precision (8000)
     8005: 8000, 8008: 8000, 8021: 8000, 8010: 8000,
@@ -25,8 +25,9 @@ RUNE_TO_STYLE = {
     8126: 8100, 8139: 8100, 8143: 8100,
     8136: 8100, 8120: 8100, 8138: 8100,
     8135: 8100, 8105: 8100, 8106: 8100,
+    8137: 8100, 8140: 8100, 8141: 8100,
     # Sorcery (8200)
-    8214: 8200, 8229: 8200, 8230: 8200,
+    8214: 8200, 8229: 8200, 8230: 8200, 8992: 8200,
     8224: 8200, 8226: 8200, 8275: 8200,
     8210: 8200, 8234: 8200, 8233: 8200,
     8237: 8200, 8232: 8200, 8236: 8200,
@@ -44,16 +45,16 @@ RUNE_TO_STYLE = {
 
 # Shards / Mods nombres
 STAT_SHARD_NAMES = {
-    5001: "Health",
+    5001: "Health Scaling",
     5002: "Armor",
     5003: "Magic Resist",
     5005: "Attack Speed",
     5007: "Ability Haste",
     5008: "Adaptive Force",
-    5010: "Movement Speed",
-    5011: "Scaling Health",
-    5012: "Tenacity & Slow Resist",
-    5013: "Tenacity"
+    5010: "Move Speed",
+    5011: "Health",
+    5012: "Resist Scaling",
+    5013: "Tenacity and Slow Resist"
 }
 
 # Excepciones comunes de slugs de campeones en Lolalytics
@@ -63,6 +64,64 @@ CHAMPION_SLUG_OVERRIDES = {
     "nunu & willump": "nunu",
     "nunu and willump": "nunu",
     "renata glasc": "renata",
+}
+
+# Diccionario de campeones multi-rol más jugados y sus líneas viables
+CHAMPION_COMMON_ROLES = {
+    "lux": ["middle", "support"],
+    "karma": ["support", "middle", "top"],
+    "swain": ["middle", "support", "bottom"],
+    "nautilus": ["support", "jungle", "top"],
+    "brand": ["support", "jungle", "middle"],
+    "malphite": ["top", "middle", "support"],
+    "yasuo": ["middle", "top"],
+    "yone": ["middle", "top"],
+    "gragas": ["top", "jungle", "middle"],
+    "karthus": ["jungle", "bottom", "middle"],
+    "seraphine": ["support", "bottom", "middle"],
+    "morgana": ["support", "jungle", "middle"],
+    "pantheon": ["support", "middle", "top"],
+    "sett": ["top", "middle", "support"],
+    "chogath": ["top", "middle"],
+    "galio": ["middle", "support"],
+    "tahmkench": ["top", "support"],
+    "heimerdinger": ["middle", "top", "support"],
+    "lucian": ["bottom", "middle"],
+    "tristana": ["bottom", "middle"],
+    "corki": ["middle", "bottom"],
+    "quinn": ["top", "middle"],
+    "teemo": ["top", "support", "jungle"],
+    "shaco": ["jungle", "support"],
+    "maokai": ["support", "jungle", "top"],
+    "poppy": ["top", "jungle", "support"],
+    "shen": ["top", "support"],
+    "sion": ["top", "middle"],
+    "zac": ["jungle", "top", "support"],
+    "volibear": ["top", "jungle"],
+    "warwick": ["jungle", "top"],
+    "vayne": ["bottom", "top"],
+    "smolder": ["bottom", "middle"],
+    "twistedfate": ["middle", "top"],
+    "jayce": ["top", "middle"],
+    "kayle": ["top", "middle"],
+    "kennen": ["top", "middle"],
+    "rumble": ["top", "middle"],
+    "olaf": ["top", "jungle"],
+    "trundle": ["top", "jungle"],
+    "wukong": ["jungle", "top"],
+    "rengar": ["jungle", "top"],
+    "diana": ["jungle", "middle"],
+    "ekko": ["jungle", "middle"],
+    "taliyah": ["jungle", "middle"],
+    "sylas": ["middle", "top", "jungle"],
+    "neeko": ["middle", "support"],
+    "hwei": ["middle", "support"],
+    "velkoz": ["support", "middle"],
+    "xerath": ["support", "middle"],
+    "zyra": ["support", "jungle", "middle"],
+    "senna": ["support", "bottom"],
+    "pyke": ["support", "middle"],
+    "kaisa": ["bottom", "middle"]
 }
 
 class LolalyticsClient:
@@ -77,6 +136,7 @@ class LolalyticsClient:
         })
         self._counters_cache: Dict[str, Any] = {}
         self._matchups_cache: Dict[str, Any] = {}
+        self._build_cache: Dict[str, Any] = {}
 
     def _slugify_champion(self, name: str) -> str:
         clean = name.strip().lower()
@@ -85,18 +145,7 @@ class LolalyticsClient:
         return re.sub(r"[^a-z0-9]", "", clean)
 
     def _get_champion_name_by_id(self, champion_id: int) -> str:
-        if not hasattr(self, "_champions_map") or not self._champions_map:
-            base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-            cache_file = os.path.join(base_dir, "champions_cache.json")
-            if os.path.isfile(cache_file):
-                try:
-                    with open(cache_file, "r", encoding="utf-8") as f:
-                        self._champions_map = {int(k): v for k, v in json.load(f).items()}
-                except Exception:
-                    self._champions_map = {}
-            else:
-                self._champions_map = {}
-        return self._champions_map.get(champion_id, f"Champ {champion_id}")
+        return get_ddragon().champion_name(champion_id) or f"Champ {champion_id}"
 
     def get_tierlist(self, lane: str = "all", tier: str = "emerald_plus") -> Dict[str, Any]:
         """
@@ -262,20 +311,37 @@ class LolalyticsClient:
             "champions": champions
         }
 
+    def get_champion_viable_roles(self, champion_name: str) -> List[str]:
+        """
+        Devuelve la lista de roles viables/populares para un campeón (ej: Lux -> ['middle', 'support']).
+        """
+        slug = self._slugify_champion(champion_name)
+        return CHAMPION_COMMON_ROLES.get(slug, ["default"])
+
     def get_champion_build(self, champion_name: str, lane: Optional[str] = None, tier: str = "emerald_plus") -> Dict[str, Any]:
         """
         Extrae la build completa (Runas con IDs, Items, Orden de Habilidades y Hechizos)
         para un campeon especifico desde Lolalytics.
         """
         slug = self._slugify_champion(champion_name)
+        norm_lane = lane.lower() if lane and lane.lower() != "all" else None
+        if norm_lane == "mid":
+            norm_lane = "middle"
+        elif norm_lane == "adc":
+            norm_lane = "bottom"
+
+        cache_key = f"{slug}_{norm_lane or 'default'}_{tier}"
+        if cache_key in self._build_cache:
+            return self._build_cache[cache_key]
+
         url = f"{self.BASE_URL}/{slug}/build/"
         params = {}
-        if lane:
-            params["lane"] = lane
+        if norm_lane:
+            params["lane"] = norm_lane
         if tier != "emerald_plus":
             params["tier"] = tier
 
-        print(f"[*] Obteniendo build de {champion_name} ({slug}) en Lolalytics...")
+        print(f"[*] Obteniendo build de {champion_name} ({slug}) [Rol: {norm_lane or 'Default'}] en Lolalytics...")
         response = self.session.get(url, params=params, timeout=15)
         response.raise_for_status()
 
@@ -335,16 +401,17 @@ class LolalyticsClient:
             sec_runes_ids = [int(x) for x in raw_runes.get("set", {}).get("sec", []) if str(x).isdigit()]
             mod_ids = [int(x) for x in raw_runes.get("set", {}).get("mod", []) if str(x).isdigit()]
 
-            # Determinar estilo primario y secundario
-            pri_style_id = RUNE_TO_STYLE.get(pri_runes_ids[0], 8000) if pri_runes_ids else 8000
-            sec_style_id = RUNE_TO_STYLE.get(sec_runes_ids[0], 8400) if sec_runes_ids else 8400
+            # Determinar estilo primario y secundario (Data Dragon conoce las runas nuevas; el mapa fijo es el respaldo)
+            dd = get_ddragon()
+            pri_style_id = (dd.rune_style(pri_runes_ids[0]) or RUNE_TO_STYLE.get(pri_runes_ids[0], 8000)) if pri_runes_ids else 8000
+            sec_style_id = (dd.rune_style(sec_runes_ids[0]) or RUNE_TO_STYLE.get(sec_runes_ids[0], 8400)) if sec_runes_ids else 8400
 
             # Lista plana de 9 perks para el cliente de LoL
             selected_perks = pri_runes_ids + sec_runes_ids + mod_ids
 
             pri_runes_formatted = [{"id": r, "name": rune_names.get(str(r), f"Perk {r}")} for r in pri_runes_ids]
             sec_runes_formatted = [{"id": r, "name": rune_names.get(str(r), f"Perk {r}")} for r in sec_runes_ids]
-            mods_formatted = [{"id": m, "name": STAT_SHARD_NAMES.get(m, f"Shard {m}")} for m in mod_ids]
+            mods_formatted = [{"id": m, "name": dd.shard_name(m) or STAT_SHARD_NAMES.get(m, f"Shard {m}")} for m in mod_ids]
 
             # Items
             items_raw = b.get("items", {})
@@ -384,9 +451,9 @@ class LolalyticsClient:
                 "skills": skills,
                 "runes": {
                     "primary_style_id": pri_style_id,
-                    "primary_style_name": STYLE_NAMES.get(pri_style_id, "Unknown"),
+                    "primary_style_name": dd.style_name(pri_style_id) or STYLE_NAMES.get(pri_style_id, "Unknown"),
                     "sub_style_id": sec_style_id,
-                    "sub_style_name": STYLE_NAMES.get(sec_style_id, "Unknown"),
+                    "sub_style_name": dd.style_name(sec_style_id) or STYLE_NAMES.get(sec_style_id, "Unknown"),
                     "selected_perk_ids": selected_perks,
                     "primary_runes": pri_runes_formatted,
                     "secondary_runes": sec_runes_formatted,
@@ -410,12 +477,39 @@ class LolalyticsClient:
         popular = format_build(build_summaries[0], "Most Popular")
         highest_wr = format_build(build_summaries[1], "Highest Win Rate") if len(build_summaries) > 1 else popular
 
-        return {
+        result = {
             "champion": champion_name,
             "slug": slug,
+            "lane": norm_lane,
             "most_popular": popular,
             "highest_winrate": highest_wr
         }
+        self._build_cache[cache_key] = result
+        return result
+
+    def get_champion_multi_builds(self, champion_name: str, requested_lane: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Obtiene las builds para todos los roles viables del campeón (ej: Lux Mid y Lux Support).
+        Retorna un diccionario mapeando el rol ('middle', 'support') a su build completa.
+        """
+        roles = list(self.get_champion_viable_roles(champion_name))
+        if requested_lane and requested_lane not in roles:
+            roles = [requested_lane] + roles
+
+        builds: Dict[str, Dict[str, Any]] = {}
+        for r in roles:
+            lane_param = None if r == "default" else r
+            try:
+                b = self.get_champion_build(champion_name, lane=lane_param)
+                role_key = r if r != "default" else "primary"
+                builds[role_key] = b
+            except Exception as e:
+                print(f"[!] No se pudo obtener build de {champion_name} para {r}: {e}")
+
+        if not builds:
+            builds["primary"] = self.get_champion_build(champion_name)
+
+        return builds
 
     def get_matchup_analysis(self, my_champion: str, enemy_champion: str, lane: Optional[str] = None) -> Dict[str, Any]:
         """
