@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Salida de PyInstaller (se regenera con build_exe.bat)
+build/
+dist/
+
+# Configuración local (atajo y riot_api_key): no se versiona
+config.json
